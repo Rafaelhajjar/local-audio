@@ -1,6 +1,6 @@
 # Validation evidence
 
-LocalAudio 0.1.0 development preview, checked on 2026-10-17. These checks establish the observed behavior below; they do not establish universal microphone compatibility, transcription accuracy or public Gatekeeper installation.
+LocalAudio development previews, checked on 2026-10-17. The 0.1 evidence below is retained; the 0.2 voice-feature checks are recorded separately. These checks establish the observed behavior below; they do not establish universal microphone compatibility, transcription accuracy or public Gatekeeper installation.
 
 ## Build and source
 
@@ -13,7 +13,7 @@ Local platform: Apple M4 Pro, macOS 15.6.1, Apple Swift 6.1.2. Root targets comp
 - [Native-writer CI](https://github.com/Rafaelhajjar/local-audio/actions/runs/39061835600) passed on `d935a71`, including all **52 tests**, source checks, app packaging and artifact upload. Subsequent evidence-only documentation changes do not alter that code.
 - The packaged app contains its helper, model manifest, resource bundles, icon, microphone/folder usage descriptions and licenses. Its local ad hoc signature passed strict verification. ZIP checksums use portable basenames.
 
-The current local suite passes **52 tests** with networking denied. It covers capture frame/rate integrity and completion races, the production native CAF writer, model transport/integrity/retry/cancellation/rollback, packaged resource lookup, recognized graph compatibility, vocabulary extensions, copy preservation, duplicate identities, metadata/queue persistence, and worker cancellation/timeouts. It does not open a microphone or download weights.
+The earlier 0.1 local suite passed **52 tests** with networking denied. It covers capture frame/rate integrity and completion races, the production native CAF writer, model transport/integrity/retry/cancellation/rollback, packaged resource lookup, recognized graph compatibility, vocabulary extensions, copy preservation, duplicate identities, metadata/queue persistence, and worker cancellation/timeouts. It does not open a microphone or download weights.
 
 ## Native audio-file writing
 
@@ -73,3 +73,19 @@ An early developer override into Documents waited inside an OS directory-open ca
 - Packaged permission denial, missing-buffer failures, USB/interface capture and broader Bluetooth speech behavior; unplug/sleep and sustained disk-pressure checks. The limited AirPods silence result above does not prove these cases.
 - A clean user/Mac installation without developer caches and a broader set of real, consented audio. Synthetic samples cannot establish real-world ASR quality.
 - Developer ID signing, notarization, stapling and Gatekeeper assessment. No valid signing identity was installed during this run. The owner explicitly chose development-preview scope; the current ZIP is ad hoc signed and unnotarized, and a downloaded copy may be blocked by macOS.
+
+## Local voice profiles (0.2 preview)
+
+The optional 26-file, 21,641,906-byte Community-1 speaker pack was downloaded explicitly in the packaged app into isolated state. Activation passed pinned integrity checks, actual Core ML loading and native tensor-I/O validation. No existing user cache, recording archive or voice profile was used.
+
+Two different generated phrases from the installed macOS Samantha voice were imported through the UI. Source/copy SHA-256 hashes matched and the two phrases had different audio hashes. Name This Voice created Synthetic A with one confirmed clean example. On the later phrase, the measured embedding cosine was 0.92609: the UI showed **Unknown** and a separate **Possible match: Synthetic A**. Explicit Confirm added its name and a second example. Keep Unknown removed that confirmation/example and restored Unknown while leaving the suggestion separate. Anonymous sidecars contained no person IDs; the private bank used mode 0600.
+
+A generated Daniel-voice control ran through the packaged speaker helper with network and all developer `.build` reads denied. It produced one usable vector with best cosine 0.52147 against Synthetic A, below the review gate. No identity or example was added. A generated 906-second repeated-voice CAF also completed anonymous analysis. These are functional checks, not a diarization or identity-accuracy benchmark; real multi-person, cross-device, cross-day calibration remains open.
+
+Worker scratch was empty after native validation and completed analysis. Fixture tests separately terminate a real child after it writes a decoded derivative and verify the private mode-0700 temporary directory and derivative are removed. A cancellation attempt on the generated long speaker file finished before the UI could cancel, so it is not counted as a native inference cancellation check.
+
+Voice-specific tests also cover atomic local persistence, corrupt/future-version preservation, stripping forged helper names, changed source/model/turn boundaries, no automatic enrollment, duplicate-content exclusion, ambiguous/malformed vectors, stale confirmations, renaming/forgetting, and Unknown-only exports before confirmation. No test downloads models or opens a microphone.
+
+The final 0.2 suite passed **88 tests**, zero failures, both normally and with networking denied. The final packaged app passed strict ad hoc signature checks, profile persistence on relaunch, explicit possible-match confirmation, atomic new-person naming and native reanalysis. The final packaged speaker helper also completed the different-voice control with network and developer build-cache reads denied. Both worker scratch folders were empty after exit; original generated audio hashes remained unchanged. All 725 protected earlier-project source files still matched their baseline, and all 653 frozen dependency hashes matched.
+
+Final tested 0.2 ZIP SHA-256: `89ec74c08310578000275af18c4ad13c6e2e1c5f3f1af350a374767bec15416c`. Model weights and test audio are absent from this ZIP and from source. This remains an ad hoc, unnotarized development preview; clean-Mac/Gatekeeper and real-person matching accuracy are unverified.

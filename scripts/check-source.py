@@ -33,7 +33,7 @@ for path in paths:
         errors.append('Private/runtime artifact in source: ' + str(relative))
     if path.name.startswith('.env'):
         errors.append('Environment/credential file in source: ' + str(relative))
-    if path.name.endswith(('.transcript.json', '.localaudio.json')) or path.name in {'jobs.json', 'settings.json', 'model-selection.json'}:
+    if path.name.endswith(('.transcript.json', '.localaudio.json', '.voices.json')) or path.name in {'jobs.json', 'settings.json', 'model-selection.json', 'voice-library.json'}:
         errors.append('Private app state in source: ' + str(relative))
     if suffix in {'.bin', '.mil', '.mlmodel', '.onnx'} and parts[0] != 'vendor':
         errors.append('Model asset in source: ' + str(relative))

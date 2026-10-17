@@ -1,6 +1,6 @@
 # Release checklist
 
-The product stays small: one local Mac app, standard microphone inputs, imported audio, optional English transcription, playback and export. These five milestones track the path from development preview to a production release. A checked source task does not establish hardware or distribution behavior.
+The product stays small: one local Mac app, standard microphone inputs, imported audio, optional English transcription, confirmed local voice profiles, playback and export. These five milestones track the path from development preview to a production release. A checked source task does not establish hardware or distribution behavior.
 
 Coordinator owns shared integration, review, public repository and releases. Capture and model workers own their disjoint source areas; tests use generated fixtures. Every milestone requires a concrete result and evidence before it is called complete.
 
@@ -13,6 +13,19 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - [x] Packaged built-in microphone capture/save/playback, graceful quit while recording and relaunch verified.
 - [x] System-default input path saved valid 24 kHz mono silence from connected AirPods Pro; Bluetooth speech quality remains unverified.
 - [x] Publish the exact tested ZIP, checksum and matching source tag as a clearly limited, ad hoc, unnotarized prerelease. Anonymous public downloads match the local bytes.
+
+## Local voice profiles (0.2 preview)
+
+- [x] Optional explicit speaker-model setup, pinned hashes, retained license/provenance and real local model-load validation.
+- [x] Anonymous turns with playback and Name This Voice; choose a saved person or create a local profile.
+- [x] Atomic private profile/confirmation storage; rename, forget and Keep Unknown revoke associated examples without changing audio/transcripts.
+- [x] Compare later recordings to confirmed clean examples; exclude same recording/content, weak and ambiguous matches.
+- [x] Keep every suggestion separate from Unknown; only explicit confirmation assigns a name or adds an example.
+- [x] Require the reviewed analysis snapshot and turn geometry when confirming; reject stale naming actions after reanalysis.
+- [x] Conservative confirmed-name display/export; mixed or insufficiently covered transcript chunks stay Unknown.
+- [x] Generated fixtures cover persistence, revocation, corruption, source drift, stale actions, cross-recording leakage and worker derivative cleanup.
+- [x] Packaged in-app model setup, generated same-voice suggestion/confirm/revoke and different-voice offline control verified.
+- [ ] Real consented multi-person evaluation across microphones, rooms, accents and days. Suggestions are experimental, with no calibrated identity-accuracy claim.
 
 ## 1. A reliable recorder
 
@@ -102,3 +115,5 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - After human microphone approval, the exact packaged app saved 7.8716 seconds of built-in 44.1 kHz mono audio (347,136 decoded frames), played it in the UI, and returned to Ready. Quitting during another recording produced 4.8762 seconds (215,040 frames), saved metadata and exited with no incomplete file or pending job. Relaunch restored the saved library.
 - The system-default path resolved to connected AirPods Pro and saved 8.54 seconds of 24 kHz mono PCM (204,960 frames). Every sample was zero: this verifies valid-silence handling and finalization, not Bluetooth speech quality. No microphone audio or derived transcript was uploaded or committed. The isolated test app was closed after verification.
 - Development preview published: https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.1.0-preview.1. Source tag points to `a46aa38`; runtime/build sources match CI-validated `d935a71`. Anonymous ZIP/checksum downloads match the tested local files. ZIP SHA-256: `59a59bac991c98a1d3124e9603c8a2af2066ee73463742819cad1891c7cc68b4`.
+
+- Voice feature 0.2: **88 tests** passed normally and with network denied. Final packaged profile persistence, new-person naming, possible-match confirmation and native reanalysis passed; final packaged speaker helper also passed a different-voice offline control. Scratch files were cleared, generated originals retained their hashes, all 725 protected source files and 653 frozen dependency files were unchanged. See the 0.2 section in VALIDATION.md for exact evidence and limits.

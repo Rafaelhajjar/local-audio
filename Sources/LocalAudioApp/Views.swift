@@ -26,6 +26,7 @@ struct RootView: View {
                 VStack(spacing: 4) {
                     sidebarButton("Record", image: "record.circle", destination: "record")
                     sidebarButton("Library", image: "rectangle.stack", destination: "library")
+                    sidebarButton("People", image: "person.2", destination: "people")
                 }.padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsLink { Label("Settings", systemImage: "gearshape").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
@@ -36,6 +37,7 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 245)
         } detail: {
             if section == "record" { RecordView(store: store, openLibrary: { section = "library" }) }
+            else if section == "people" { PeopleView(voices: store.voices) }
             else { LibraryView(store: store, record: { section = "record" }) }
         }
         .disabled(store.isShuttingDown)
@@ -209,8 +211,10 @@ struct LibraryView: View {
 struct RecordingDetail: View {
     @ObservedObject var store: AppStore
     @ObservedObject private var player: PlaybackController
+    @ObservedObject private var voices: VoiceController
     @State private var query = ""
-    init(store: AppStore) { self.store = store; player = store.player }
+    @State private var detailTab = "transcript"
+    init(store: AppStore) { self.store = store; player = store.player; voices = store.voices }
     var body: some View {
         if let item = store.selected {
             VStack(alignment: .leading, spacing: 18) {
@@ -236,6 +240,13 @@ struct RecordingDetail: View {
                 }.padding(16).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
                 if let error = player.error { Text(error).foregroundStyle(.orange).font(.callout) }
                 Divider()
+                Picker("Recording detail", selection: $detailTab) {
+                    Text("Transcript").tag("transcript")
+                    Text("Voices").tag("voices")
+                }.pickerStyle(.segmented).labelsHidden()
+                if detailTab == "voices" {
+                    RecordingVoicesView(store: store, item: item)
+                } else {
                 HStack {
                     Label("Transcript", systemImage: "doc.text").font(.headline)
                     Spacer()
@@ -252,7 +263,12 @@ struct RecordingDetail: View {
                             if transcript.segments.isEmpty { Text(transcript.text.isEmpty ? "No speech was detected in this recording." : transcript.text).textSelection(.enabled) }
                             ForEach(transcript.segments.filter { query.isEmpty || $0.text.localizedCaseInsensitiveContains(query) }) { segment in
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Button { player.jump(to: segment.start) } label: { Text(item.date.addingTimeInterval(segment.start), format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit()) }.buttonStyle(.link)
+                                    HStack {
+                                        Button { player.jump(to: segment.start) } label: { Text(item.date.addingTimeInterval(segment.start), format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit()) }.buttonStyle(.link)
+                                        if voices.analysis?.recordingID == item.id {
+                                            Text(voices.confirmedName(start: segment.start, end: segment.end) ?? "Unknown").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                        }
+                                    }
                                     Text(segment.text).font(.system(size: 15)).lineSpacing(5).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                                 }
                             }
@@ -265,6 +281,7 @@ struct RecordingDetail: View {
                         if !store.models.isReady { SettingsLink { Text("Open Settings") } }
                     }.padding(.vertical, 18)
                     Spacer()
+                }
                 }
             }.padding(24).frame(minWidth: 430, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .onChange(of: item.id) { _, _ in query = "" }
@@ -323,6 +340,7 @@ struct SettingsView: View {
                     if store.pendingCount > 0 { Button(store.queuePaused ? "Resume" : "Pause") { store.queuePaused ? store.resumeQueue() : store.pauseQueue() } }
                 }
             }
+            SpeakerModelSettings(store: store)
             Section {
                 Label("Stored and processed on your Mac", systemImage: "lock.shield").foregroundStyle(Color.accentTeal)
                 Text("LocalAudio records your selected microphone only. It does not record system audio. Keep consent and your surroundings in mind when recording.").font(.caption).foregroundStyle(.secondary)

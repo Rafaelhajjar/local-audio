@@ -69,14 +69,14 @@ final class ModelInstallerTests: XCTestCase {
         return directory
     }
 
-    private func fixture() -> (ModelManifest, [String: Data]) {
-        var paths = ModelManifest.requiredBundles.flatMap { bundle in
+    private func fixture(pack: ModelPack = .transcription) -> (ModelManifest, [String: Data]) {
+        var paths = pack.requiredBundles.flatMap { bundle in
             ["coremldata.bin", "model.mil", "weights/weight.bin"].map { bundle + "/" + $0 }
         }
-        paths += ["parakeet_vocab.json", "README.md"]
+        paths += [pack.parameterFile] + pack.attributionFiles.sorted()
         let contents = Dictionary(uniqueKeysWithValues: paths.map { ($0, Data(("fixture:" + $0).utf8)) })
         let revision = String(repeating: "a", count: 40)
-        let repo = "FluidInference/parakeet-tdt-0.6b-v2-coreml"
+        let repo = pack.repository
         let files = paths.map { path in
             let data = contents[path]!
             return ModelManifestFile(path: path,
@@ -84,7 +84,7 @@ final class ModelInstallerTests: XCTestCase {
                 size: Int64(data.count), algorithm: .sha256,
                 digest: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
         }
-        return (ModelManifest(schemaVersion: 1, id: "parakeet-v2", repository: repo, revision: revision,
+        return (ModelManifest(schemaVersion: 1, id: pack.rawValue, repository: repo, revision: revision,
             displayName: "Fixture", license: "CC-BY-4.0", licenseURL: URL(string: "https://creativecommons.org/licenses/by/4.0/")!,
             attribution: "Synthetic fixture", modelCardURL: URL(string: "https://huggingface.co/")!,
             totalBytes: files.reduce(0) { $0 + $1.size }, files: files), contents)
@@ -207,6 +207,60 @@ final class ModelInstallerTests: XCTestCase {
         XCTAssertEqual(restored, directory)
         let finalCount = await downloader.requested.count
         XCTAssertEqual(finalCount, contents.count, "Restore must not contact the downloader")
+    }
+
+    func testSpeakerPackUsesSharedInstallerAndOwnActivationIdentity() async throws {
+        let root = try temporary()
+        let (manifest, contents) = fixture(pack: .speakers)
+        let downloader = FixtureModelDownloader(contents: contents)
+        let worker = installer(root, manifest: manifest, downloader: downloader)
+        let manager = ModelManager(installer: worker)
+        XCTAssertEqual(manager.pack, .speakers)
+        XCTAssertFalse(manager.isReady)
+        XCTAssertTrue(manager.statusText.contains("optional speaker"))
+        await manager.refresh()
+        XCTAssertTrue(manager.statusText.contains("optional speaker"))
+        let beforeInstall = await downloader.requested
+        XCTAssertTrue(beforeInstall.isEmpty)
+        await manager.install()
+        XCTAssertTrue(manager.isReady)
+        XCTAssertTrue(manager.modelDirectory!.path.contains("/installed/speakers-community-1-"))
+        XCTAssertEqual(manager.statusText, "Speaker models loaded and ready.")
+        let restored = try await worker.restore(report: { _ in })
+        XCTAssertEqual(restored, manager.modelDirectory)
+        let requests = await downloader.requested
+        XCTAssertEqual(requests.count, contents.count)
+    }
+
+    func testSavedSelectionCannotRestoreAsDifferentModelPack() async throws {
+        let root = try temporary()
+        let (manifest, contents) = fixture()
+        let downloader = FixtureModelDownloader(contents: contents)
+        let transcription = installer(root, manifest: manifest, downloader: downloader)
+        _ = try await transcription.install(report: { _ in })
+        let (speakerManifest, speakerContents) = fixture(pack: .speakers)
+        let speakerDownloader = FixtureModelDownloader(contents: speakerContents)
+        let speakers = installer(root, manifest: speakerManifest, downloader: speakerDownloader)
+        do {
+            _ = try await speakers.restore(report: { _ in })
+            XCTFail("A different pack must not be accepted from the same settings file")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("another model pack"))
+        }
+        let requests = await speakerDownloader.requested
+        XCTAssertTrue(requests.isEmpty)
+    }
+
+    func testLegacyTranscriptionSelectionStillRestoresWithoutPackField() async throws {
+        let root = try temporary()
+        let (manifest, contents) = fixture()
+        let downloader = FixtureModelDownloader(contents: contents)
+        let worker = installer(root, manifest: manifest, downloader: downloader)
+        let installed = try await worker.install(report: { _ in })
+        let selection = root.appendingPathComponent("store/model-selection.json")
+        try JSONSerialization.data(withJSONObject: ["path": installed.path, "managedRevision": manifest.revision]).write(to: selection)
+        let restored = try await worker.restore(report: { _ in })
+        XCTAssertEqual(restored, installed)
     }
 
     func testHashFailureKeepsExistingSelectedModelAndNeverActivatesBadPack() async throws {

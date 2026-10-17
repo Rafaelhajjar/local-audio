@@ -11,8 +11,10 @@ final class WorkerProcess {
     private var timedOut = false
     private var logURL: URL?
     private var logHandle: FileHandle?
+    private var temporaryURL: URL?
 
     static func helperURL() -> URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/local-audio-transcriber") }
+    static func speakerHelperURL() -> URL { Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/local-audio-speakers") }
 
     static func validate(executable: URL, modelFolder: URL, logs: URL) async throws {
         let worker = WorkerProcess()
@@ -24,11 +26,25 @@ final class WorkerProcess {
         guard process == nil else { throw LocalAudioError.message("A local worker is already running.") }
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw LocalAudioError.message("The local transcription helper is missing. Reinstall LocalAudio from a complete app download.") }
         try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let logURL = logs.appendingPathComponent("worker-" + UUID().uuidString + ".log")
+        let identifier = UUID().uuidString
+        let logURL = logs.appendingPathComponent("worker-" + identifier + ".log")
+        let temporaryURL = logs.appendingPathComponent("worker-" + identifier + ".tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryURL, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         FileManager.default.createFile(atPath: logURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        let handle = try FileHandle(forWritingTo: logURL)
-        self.logURL = logURL; logHandle = handle; timedOut = false
+        let handle: FileHandle
+        do { handle = try FileHandle(forWritingTo: logURL) }
+        catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            try? FileManager.default.removeItem(at: logURL)
+            throw error
+        }
+        self.logURL = logURL; self.temporaryURL = temporaryURL; logHandle = handle; timedOut = false
         let child = Process(); child.executableURL = executable; child.arguments = arguments
+        // SDK decoding may create raw audio and its defer cannot run after a
+        // terminated child. Confine all such derivatives to this owned folder.
+        var environment = ProcessInfo.processInfo.environment
+        environment["TMPDIR"] = temporaryURL.path + "/"
+        child.environment = environment
         child.standardOutput = handle; child.standardError = handle; child.qualityOfService = .utility
         process = child
         try await withTaskCancellationHandler {
@@ -70,7 +86,8 @@ final class WorkerProcess {
         try? logHandle?.close(); logHandle = nil
         let text = logURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
         if let logURL { try? FileManager.default.removeItem(at: logURL) }
-        process = nil; logURL = nil
+        if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL) }
+        process = nil; logURL = nil; temporaryURL = nil
         if let error { continuation.resume(throwing: error) }
         else if cancelled { continuation.resume(throwing: CancellationError()) }
         else if timedOut { continuation.resume(throwing: LocalAudioError.message("Local transcription took too long and was stopped. Your audio and earlier transcript are safe. Try again with a shorter recording.")) }

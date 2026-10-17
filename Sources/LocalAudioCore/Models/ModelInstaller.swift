@@ -114,10 +114,10 @@ actor ModelInstaller {
         try Task.checkCancellation()
         let installs = storage.appendingPathComponent("installed", isDirectory: true)
         try ensureDirectory(installs)
-        let activated = installs.appendingPathComponent("parakeet-v2-" + manifest.revision + "-" + UUID().uuidString, isDirectory: true)
+        let activated = installs.appendingPathComponent(manifest.id + "-" + manifest.revision + "-" + UUID().uuidString, isDirectory: true)
         try fileManager.moveItem(at: staging, to: activated)
         do {
-            try persist(Selection(path: activated.path, managedRevision: manifest.revision))
+            try persist(Selection(path: activated.path, managedRevision: manifest.revision, modelPackID: manifest.id))
         } catch {
             // Previous selection is still authoritative. Retain the completed
             // pack for diagnosis rather than deleting any existing install.
@@ -132,14 +132,17 @@ actor ModelInstaller {
         try await validator(resolved)
         try Task.checkCancellation()
         try ensureDirectory(storage)
-        try persist(Selection(path: resolved.path, managedRevision: nil))
+        try persist(Selection(path: resolved.path, managedRevision: nil, modelPackID: manifest.id))
         return resolved
     }
 
     func restore(report: @escaping Reporter) async throws -> URL {
-        guard fileManager.fileExists(atPath: selectionURL.path) else { throw ModelSetupError.notSelected }
+        guard fileManager.fileExists(atPath: selectionURL.path) else { throw ModelSetupError.notSelected(manifest.pack) }
         try rejectSymlink(selectionURL)
         let selection = try JSONDecoder().decode(Selection.self, from: Data(contentsOf: selectionURL))
+        guard selection.modelPackID == nil || selection.modelPackID == manifest.id else {
+            throw ModelSetupError.message("This saved model selection belongs to another model pack. Select the correct optional model folder in Settings.")
+        }
         let directory = URL(fileURLWithPath: selection.path, isDirectory: true).standardizedFileURL
         report(.init(text: "Checking the selected local model…", fraction: nil))
         if let revision = selection.managedRevision {
@@ -154,7 +157,7 @@ actor ModelInstaller {
         return directory
     }
 
-    private struct Selection: Codable { let path: String; let managedRevision: String? }
+    private struct Selection: Codable { let path: String; let managedRevision: String?; let modelPackID: String? }
 
     private func persist(_ selection: Selection) throws {
         try rejectSymlink(selectionURL)
@@ -173,14 +176,14 @@ actor ModelInstaller {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue,
               fileManager.isReadableFile(atPath: directory.path) else {
-            throw ModelSetupError.message("The selected model folder is missing or unreadable. Select the folder containing the four .mlmodelc bundles and parakeet_vocab.json.")
+            throw ModelSetupError.message("The selected model folder is missing or unreadable. Select the folder containing the four supported .mlmodelc bundles and \(manifest.pack.parameterFile).")
         }
-        for bundle in ModelManifest.requiredBundles {
+        for bundle in manifest.requiredBundles {
             try Task.checkCancellation()
             let root = directory.appendingPathComponent(bundle, isDirectory: true)
             isDirectory = false
             guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-                throw ModelSetupError.message("The selected folder is missing \(bundle). Choose the folder containing all four Parakeet v2 bundles.")
+                throw ModelSetupError.message("The selected folder is missing \(bundle). Choose the folder containing all four \(manifest.displayName) bundles.")
             }
             try requireFile(root.appendingPathComponent("coremldata.bin"))
             guard let items = fileManager.enumerator(at: root, includingPropertiesForKeys: nil) else {
@@ -193,7 +196,7 @@ actor ModelInstaller {
                 }
             }
         }
-        try requireFile(directory.appendingPathComponent("parakeet_vocab.json"))
+        try requireFile(directory.appendingPathComponent(manifest.pack.parameterFile))
     }
 
     private func requireFile(_ url: URL) throws {

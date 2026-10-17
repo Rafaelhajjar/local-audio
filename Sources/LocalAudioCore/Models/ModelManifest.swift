@@ -14,43 +14,50 @@ struct ModelManifest: Codable, Sendable {
     let totalBytes: Int64
     let files: [ModelManifestFile]
 
-    static func bundled(resourcesDirectory: URL? = Bundle.main.resourceURL,
+    var pack: ModelPack { ModelPack(rawValue: id)! } // validate() precedes use.
+    var requiredBundles: [String] { pack.requiredBundles }
+
+    static func bundled(pack: ModelPack = .transcription, resourcesDirectory: URL? = Bundle.main.resourceURL,
                         executableURL: URL? = Bundle.main.executableURL,
-                        fallback: () -> URL? = { Bundle.module.url(forResource: "parakeet-v2", withExtension: "json") }) throws -> Self {
+                        fallback: (() -> URL?)? = nil) throws -> Self {
         // SwiftPM's generated accessor may embed an absolute development path
         // or look beside the app. Resolve the standard packaged resource first;
         // do not evaluate Bundle.module until that location has been checked.
         var candidates = resourcesDirectory.map {
             [$0.appendingPathComponent("LocalAudio_LocalAudioCore.bundle", isDirectory: true)]
         } ?? []
-        if let executableURL, executableURL.lastPathComponent == "local-audio-transcriber",
+        if let executableURL, ["local-audio-transcriber", "local-audio-speakers"].contains(executableURL.lastPathComponent),
            executableURL.deletingLastPathComponent().lastPathComponent == "Helpers" {
             let contents = executableURL.deletingLastPathComponent().deletingLastPathComponent()
             candidates.append(contents.appendingPathComponent("Resources/LocalAudio_LocalAudioCore.bundle", isDirectory: true))
         }
         var packagedURL: URL?
         for candidate in candidates {
-            let direct = candidate.appendingPathComponent("parakeet-v2.json")
+            let direct = candidate.appendingPathComponent(pack.rawValue + ".json")
             if FileManager.default.isReadableFile(atPath: direct.path) {
                 packagedURL = direct
                 break
             }
-            if let bundle = Bundle(url: candidate), let nested = bundle.url(forResource: "parakeet-v2", withExtension: "json") {
+            if let bundle = Bundle(url: candidate), let nested = bundle.url(forResource: pack.rawValue, withExtension: "json") {
                 packagedURL = nested
                 break
             }
         }
-        let url = packagedURL ?? fallback()
+        let url = packagedURL ?? (fallback.map { $0() } ?? Bundle.module.url(forResource: pack.rawValue, withExtension: "json"))
         guard let url else {
             throw ModelSetupError.message("The bundled model manifest is missing. Reinstall LocalAudio.")
         }
         let manifest = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
         try manifest.validate()
+        guard manifest.id == pack.rawValue, manifest.revision == pack.revision,
+              manifest.totalBytes == pack.totalBytes else {
+            throw ModelSetupError.message("The bundled model manifest does not match the supported model pack. Reinstall LocalAudio.")
+        }
         return manifest
     }
 
     func validate() throws {
-        guard schemaVersion == 1, id == "parakeet-v2", repository == "FluidInference/parakeet-tdt-0.6b-v2-coreml", revision.count == 40,
+        guard let pack = ModelPack(rawValue: id), schemaVersion == 1, repository == pack.repository, revision.count == 40,
               revision.allSatisfy({ $0.isHexDigit }), !files.isEmpty,
               license == "CC-BY-4.0", licenseURL.scheme == "https", !attribution.isEmpty else {
             throw ModelSetupError.message("The bundled model manifest is invalid.")
@@ -59,6 +66,12 @@ struct ModelManifest: Codable, Sendable {
         var sum: Int64 = 0
         for file in files {
             try file.validatePath()
+            let components = file.path.split(separator: "/", maxSplits: 1).map(String.init)
+            let allowedBundleFiles: Set<String> = ["coremldata.bin", "model.mil", "metadata.json", "weights/weight.bin", "analytics/coremldata.bin"]
+            let isBundleFile = components.count == 2 && pack.requiredBundles.contains(components[0]) && allowedBundleFiles.contains(components[1])
+            guard isBundleFile || file.path == pack.parameterFile || pack.attributionFiles.contains(file.path) else {
+                throw ModelSetupError.message("Unexpected asset outside the supported model pack: \(file.path)")
+            }
             let digestLength = file.algorithm == .sha256 ? 64 : 40
             guard file.size > 0, file.digest.count == digestLength,
                   file.digest.allSatisfy({ $0.isHexDigit }), paths.insert(file.path).inserted else {
@@ -73,19 +86,19 @@ struct ModelManifest: Codable, Sendable {
             sum = next
         }
         guard totalBytes == sum else { throw ModelSetupError.message("Model download sizes do not match the manifest.") }
-        for bundle in Self.requiredBundles {
+        for bundle in pack.requiredBundles {
             for child in ["coremldata.bin", "model.mil", "weights/weight.bin"] {
                 guard paths.contains(bundle + "/" + child) else {
                     throw ModelSetupError.message("Required model asset is absent from manifest: \(bundle)/\(child)")
                 }
             }
         }
-        guard paths.contains("parakeet_vocab.json"), paths.contains("README.md") else {
+        guard paths.contains(pack.parameterFile), pack.attributionFiles.isSubset(of: paths) else {
             throw ModelSetupError.message("The model vocabulary or attribution is absent from the manifest.")
         }
     }
 
-    static let requiredBundles = ["Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecision.mlmodelc"]
+    static let requiredBundles = ModelPack.transcription.requiredBundles
 }
 
 struct ModelManifestFile: Codable, Sendable {
@@ -108,11 +121,11 @@ struct ModelManifestFile: Codable, Sendable {
 
 enum ModelSetupError: LocalizedError, Sendable {
     case message(String)
-    case notSelected
+    case notSelected(ModelPack)
     var errorDescription: String? {
         switch self {
         case .message(let message): return message
-        case .notSelected: return "Download the English model or choose an existing local model folder."
+        case .notSelected(let pack): return pack.setupPrompt
         }
     }
 }
@@ -140,7 +153,7 @@ enum ModelFileIntegrity {
             ? sha256.finalize().map { String(format: "%02x", $0) }.joined()
             : sha1.finalize().map { String(format: "%02x", $0) }.joined()
         guard actual == expected.digest.lowercased() else {
-            throw ModelSetupError.message("Model checksum failed: \(expected.path). This model file was rejected. Download or repair the English model in Settings.")
+            throw ModelSetupError.message("Model checksum failed: \(expected.path). This model file was rejected. Download or repair this model pack in Settings.")
         }
     }
 }

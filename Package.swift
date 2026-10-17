@@ -6,12 +6,14 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "LocalAudio", targets: ["LocalAudioApp"]),
-        .executable(name: "local-audio-transcriber", targets: ["LocalAudioTranscriber"])
+        .executable(name: "local-audio-transcriber", targets: ["LocalAudioTranscriber"]),
+        .executable(name: "local-audio-speakers", targets: ["LocalAudioSpeakers"])
     ],
     targets: [
         .target(name: "LocalAudioCore", resources: [.process("Resources")]),
         .executableTarget(name: "LocalAudioApp", dependencies: ["LocalAudioCore"], swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "LocalAudioTranscriber", dependencies: ["LocalAudioCore", "FluidAudio"]),
+        .executableTarget(name: "LocalAudioSpeakers", dependencies: ["LocalAudioCore", "FluidAudio"]),
         .target(name: "FluidAudio", dependencies: ["FastClusterWrapper", "MachTaskSelfWrapper"],
             path: "vendor/FluidAudio/Sources/FluidAudio", exclude: ["ASR/Parakeet/Unified/benchmark.md"],
             resources: [.process("TTS/LuxTts/G2p/Resources")]),

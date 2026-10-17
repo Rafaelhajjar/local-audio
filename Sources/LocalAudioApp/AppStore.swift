@@ -31,6 +31,7 @@ final class AppStore: ObservableObject {
     @Published var titleDraft = ""
     @Published var dateDraft = Date()
     let models: ModelManager
+    let voices: VoiceController
     let capture = CaptureController()
     let player = PlaybackController()
     let dataFolder: URL
@@ -48,7 +49,7 @@ final class AppStore: ObservableObject {
 
     var selected: AudioRecording? { recordings.first { $0.id == selection } }
     var pendingCount: Int { jobs.filter { $0.status != .failed }.count }
-    var canChangeFolder: Bool { !isShuttingDown && !capture.isRecording && !capture.isStarting && !capture.isFinalizing && !isProcessing && !isImporting && registrationTasks.isEmpty }
+    var canChangeFolder: Bool { !isShuttingDown && !capture.isRecording && !capture.isStarting && !capture.isFinalizing && !isProcessing && !isImporting && !voices.isBusy && registrationTasks.isEmpty }
 
     func startRecording() async {
         guard !isShuttingDown else { return }
@@ -78,6 +79,7 @@ final class AppStore: ObservableObject {
         models = ModelManager(storageDirectory: paths.data.appendingPathComponent("Models"), validator: { folder in
             try await WorkerProcess.validate(executable: helper, modelFolder: folder, logs: logs)
         })
+        voices = VoiceController(dataFolder: paths.data)
         let jobsURL = paths.data.appendingPathComponent("jobs.json")
         if FileManager.default.fileExists(atPath: jobsURL.path) {
             do {
@@ -95,6 +97,9 @@ final class AppStore: ObservableObject {
             }
         }
         errorMessage = initialError
+        voices.canAnalyze = { [weak self] in self?.isProcessing == false && self?.isShuttingDown == false }
+        voices.onWorkFinished = { [weak self] in self?.processNext() }
+        voices.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &presentationUpdates)
         // Computed store values depend on nested state. Forward state changes,
         // while keeping high-frequency audio meter updates in the capture view.
         capture.$isRecording.combineLatest(capture.$isStarting, capture.$isFinalizing)
@@ -109,8 +114,10 @@ final class AppStore: ObservableObject {
     func start() async {
         guard !hasStarted, !isShuttingDown else { return }; hasStarted = true
         async let scan: Void = refresh()
+        async let voiceSetup: Void = voices.start()
         await models.refresh()
         await scan
+        await voiceSetup
         processNext()
     }
 
@@ -131,14 +138,17 @@ final class AppStore: ObservableObject {
     func loadSelection() async {
         player.load(selected)
         transcript = nil; transcriptError = nil
-        guard let selected else { return }
-        titleDraft = selected.title; dateDraft = selected.date
-        guard FileManager.default.fileExists(atPath: selected.transcriptURL.path) else { return }
-        do {
-            let loaded = try PrivateJSON.read(LocalTranscript.self, from: selected.transcriptURL)
-            guard loaded.version == 1 else { throw LocalAudioError.message("This transcript needs a newer LocalAudio version.") }
-            transcript = loaded
-        } catch { transcriptError = "This transcript could not be read. It has not been changed. " + error.localizedDescription }
+        if let selected {
+            titleDraft = selected.title; dateDraft = selected.date
+            if FileManager.default.fileExists(atPath: selected.transcriptURL.path) {
+                do {
+                    let loaded = try PrivateJSON.read(LocalTranscript.self, from: selected.transcriptURL)
+                    guard loaded.version == 1 else { throw LocalAudioError.message("This transcript needs a newer LocalAudio version.") }
+                    transcript = loaded
+                } catch { transcriptError = "This transcript could not be read. It has not been changed. " + error.localizedDescription }
+            }
+        }
+        await voices.select(selected)
     }
 
     func saveDetails() async {
@@ -225,7 +235,7 @@ final class AppStore: ObservableObject {
     func pauseQueue() { queuePaused = true; runner?.cancel() }
 
     func processNext() {
-        guard !isShuttingDown, !isProcessing, !queuePaused, jobsWritable, !models.isBusy, models.isReady, let modelFolder = models.modelDirectory,
+        guard !isShuttingDown, !isProcessing, processingTask == nil, !voices.isBusy, !queuePaused, jobsWritable, !models.isBusy, models.isReady, let modelFolder = models.modelDirectory,
               let index = jobs.firstIndex(where: { $0.status == .queued }) else { return }
         let job = jobs[index]
         jobs[index].status = .running
@@ -233,19 +243,25 @@ final class AppStore: ObservableObject {
         isProcessing = true; processingTitle = job.title
         let worker = WorkerProcess(); runner = worker
         processingTask = Task {
+            var completed = false
             do {
                 guard FileManager.default.isReadableFile(atPath: job.audioURL.path) else { throw LocalAudioError.message("The audio file is unavailable. Reconnect its drive or restore the file, then retry.") }
                 try await worker.run(executable: WorkerProcess.helperURL(), arguments: ["--input", job.audioURL.path, "--models", modelFolder.path, "--output", AudioRecording.transcriptURL(for: job.audioURL).path], logs: dataFolder.appendingPathComponent("WorkerScratch"))
                 let result = try PrivateJSON.read(LocalTranscript.self, from: AudioRecording.transcriptURL(for: job.audioURL))
                 guard result.version == 1 else { throw LocalAudioError.message("The local worker produced an unsupported transcript.") }
                 jobs.removeAll { $0.id == job.id }
+                completed = true
             } catch is CancellationError {
                 if let index = jobs.firstIndex(where: { $0.id == job.id }) { jobs[index].status = .queued }
             } catch {
                 if let index = jobs.firstIndex(where: { $0.id == job.id }) { jobs[index].status = .failed; jobs[index].error = error.localizedDescription }
             }
-            _ = persistJobs(); runner = nil; processingTask = nil; isProcessing = false; processingTitle = ""
-            await refresh(); processNext()
+            _ = persistJobs(); runner = nil; isProcessing = false; processingTitle = ""
+            await refresh()
+            if completed, !isShuttingDown, !queuePaused, voices.models.isReady,
+               let item = recordings.first(where: { $0.id == job.id }) { await voices.analyze(item) }
+            processingTask = nil
+            processNext()
         }
     }
 
@@ -260,8 +276,12 @@ final class AppStore: ObservableObject {
         let panel = NSSavePanel(); panel.allowedContentTypes = [.plainText]; panel.nameFieldStringValue = selected.title + ".txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard url.resolvingSymlinksInPath() != selected.url.resolvingSymlinksInPath(), url.resolvingSymlinksInPath() != selected.transcriptURL.resolvingSymlinksInPath() else { errorMessage = "Choose a different file so the audio and transcript remain safe."; return }
-        do { try transcript.exportedText(title: selected.title, recordedAt: selected.date).write(to: url, atomically: true, encoding: .utf8) }
-        catch { errorMessage = error.localizedDescription }
+        Task {
+            do {
+                let text = try await voices.validatedExportedText(transcript, item: selected)
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch { errorMessage = error.localizedDescription }
+        }
     }
 
     func prepareToQuit() async {
@@ -269,11 +289,13 @@ final class AppStore: ObservableObject {
         queuePaused = true
         runner?.cancel()
         models.cancel()
+        voices.beginShutdown()
         await capture.stop()
         for task in Array(registrationTasks.values) { await task.value }
         if let importTask { await importTask.value }
         if let processingTask { await processingTask.value }
         await models.cancelAndWait()
+        await voices.shutdownAndWait()
         savePreferences()
     }
 }
@@ -288,6 +310,7 @@ final class PlaybackController: ObservableObject {
     private var audio: AVAudioPlayer?
     private var currentURL: URL?
     private var timer: Timer?
+    private var playbackEnd: Double?
     init() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -300,10 +323,19 @@ final class PlaybackController: ObservableObject {
         do { audio = try AVAudioPlayer(contentsOf: item.url); audio?.enableRate = true; audio?.rate = rate; duration = audio?.duration ?? item.duration }
         catch { self.error = "This audio could not be opened for playback: " + error.localizedDescription }
     }
-    func play() { guard let audio else { return }; if audio.currentTime >= audio.duration - 0.05 { audio.currentTime = 0 }; isPlaying = audio.play(); if !isPlaying { error = "Playback could not start. Check your Mac's audio output." } }
-    func pause() { audio?.pause(); isPlaying = false }
+    func play() { playbackEnd = nil; startPlayback() }
+    private func startPlayback() { guard let audio else { return }; if audio.currentTime >= audio.duration - 0.05 { audio.currentTime = 0 }; isPlaying = audio.play(); if !isPlaying { error = "Playback could not start. Check your Mac's audio output." } }
+    func pause() { audio?.pause(); isPlaying = false; playbackEnd = nil }
     func toggle() { isPlaying ? pause() : play() }
-    func seek(_ seconds: Double) { let time = max(0, min(duration, seconds)); audio?.currentTime = time; position = time }
+    func seek(_ seconds: Double) { playbackEnd = nil; let time = max(0, min(duration, seconds)); audio?.currentTime = time; position = time }
     func jump(to seconds: Double) { seek(seconds); play() }
-    private func tick() { guard let audio else { return }; position = audio.currentTime; isPlaying = audio.isPlaying }
+    func playClip(start: Double, end: Double) {
+        guard start.isFinite, end.isFinite, end > start else { return }
+        seek(start); playbackEnd = min(duration, end); startPlayback()
+    }
+    private func tick() {
+        guard let audio else { return }
+        if let end = playbackEnd, audio.currentTime >= end { audio.currentTime = end; pause() }
+        position = audio.currentTime; isPlaying = audio.isPlaying
+    }
 }

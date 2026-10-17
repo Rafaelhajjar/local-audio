@@ -8,15 +8,18 @@ public final class ModelManager: ObservableObject {
     @Published public private(set) var isBusy = false
     @Published public private(set) var modelDirectory: URL?
     @Published public private(set) var isReady = false
+    public let pack: ModelPack
 
     private let installer: ModelInstaller?
     private var operationTask: Task<URL, Error>?
     private var operationID: UUID?
     private var completionWaiters: [UUID: [CheckedContinuation<Void, Never>]] = [:]
 
-    public init(storageDirectory: URL, validator: @escaping @Sendable (URL) async throws -> Void) {
+    public init(storageDirectory: URL, pack: ModelPack = .transcription, validator: @escaping @Sendable (URL) async throws -> Void) {
+        self.pack = pack
+        statusText = pack.setupPrompt
         do {
-            installer = ModelInstaller(storage: storageDirectory, manifest: try ModelManifest.bundled(),
+            installer = ModelInstaller(storage: storageDirectory, manifest: try ModelManifest.bundled(pack: pack),
                 downloader: StreamingModelDownloader(), validator: validator)
         } catch {
             installer = nil
@@ -24,7 +27,7 @@ public final class ModelManager: ObservableObject {
         }
     }
 
-    init(installer: ModelInstaller) { self.installer = installer }
+    init(installer: ModelInstaller) { self.installer = installer; pack = installer.manifest.pack; statusText = pack.setupPrompt }
 
     /// Explicit user action. The only operation that can request network data.
     public func install() async {
@@ -100,7 +103,7 @@ public final class ModelManager: ObservableObject {
             isReady = true
             switch operation {
             case .local: statusText = "Local model loaded and ready."
-            default: statusText = "English model loaded and ready."
+            default: statusText = pack.readyText
             }
         } catch {
             if case .refresh = operation { modelDirectory = nil; isReady = false }

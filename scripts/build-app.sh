@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd -P)"
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be x.y.z' >&2; exit 2; }
@@ -19,6 +19,7 @@ APP="$STAGING/LocalAudio.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 cp "$BIN/LocalAudio" "$APP/Contents/MacOS/LocalAudio"
 cp "$BIN/local-audio-transcriber" "$APP/Contents/Helpers/local-audio-transcriber"
+cp "$BIN/local-audio-speakers" "$APP/Contents/Helpers/local-audio-speakers"
 for BUNDLE in "$BIN"/*.bundle; do
     [[ -d "$BUNDLE" ]] && ditto "$BUNDLE" "$APP/Contents/Resources/$(basename "$BUNDLE")"
 done
@@ -53,9 +54,11 @@ plutil -lint "$APP/Contents/Info.plist"
 xattr -cr "$APP"
 if [[ "$SIGN_IDENTITY" == - ]]; then
     codesign --force --sign - "$APP/Contents/Helpers/local-audio-transcriber"
+    codesign --force --sign - "$APP/Contents/Helpers/local-audio-speakers"
     codesign --force --sign - "$APP"
 else
     codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/local-audio-transcriber"
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/local-audio-speakers"
     codesign --force --options runtime --timestamp --entitlements Resources/LocalAudio.entitlements --sign "$SIGN_IDENTITY" "$APP"
 fi
 codesign --verify --strict --deep --verbose=2 "$APP"

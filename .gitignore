@@ -19,5 +19,7 @@ work/
 *.p12
 *.pem
 *.key
+*.voices.json
+voice-library.json
 __pycache__/
 *.pyc

@@ -55,4 +55,29 @@ final class WorkerProcessTests: XCTestCase {
         } catch { XCTAssertTrue(error.localizedDescription.contains("helper is missing")) }
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: logs.path).isEmpty)
     }
+
+    func testPrivateTemporaryAudioIsRemovedAfterSuccessfulChild() async throws {
+        let logs = try scratch()
+        let script = "import os, pathlib, stat; p=pathlib.Path(os.environ['TMPDIR']); assert stat.S_IMODE(p.stat().st_mode)==0o700; (p/'decoded.raw').write_bytes(b'generated derivative')"
+        try await WorkerProcess().run(executable: URL(fileURLWithPath: "/usr/bin/python3"), arguments: ["-c", script], logs: logs)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: logs.path).isEmpty)
+    }
+
+    func testCancellationRemovesAChildsAbandonedDecodedAudio() async throws {
+        let logs = try scratch(), worker = WorkerProcess()
+        let script = "import os, pathlib, time; (pathlib.Path(os.environ['TMPDIR'])/'decoded.raw').write_bytes(b'generated derivative'); time.sleep(20)"
+        let task = Task { try await worker.run(executable: URL(fileURLWithPath: "/usr/bin/python3"), arguments: ["-c", script], logs: logs) }
+        var derivative: URL?
+        for _ in 0..<100 {
+            let folders = try FileManager.default.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)
+            derivative = folders.map { $0.appendingPathComponent("decoded.raw") }.first { FileManager.default.fileExists(atPath: $0.path) }
+            if derivative != nil { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(derivative, "The child must create a derivative before the cancellation test.")
+        worker.cancel()
+        do { try await task.value; XCTFail("Cancelled child reported success") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: logs.path).isEmpty)
+    }
 }
