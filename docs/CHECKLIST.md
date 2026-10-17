@@ -83,6 +83,8 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 
 - Capture/model readiness now propagates to dependent store views without forwarding audio-meter ticks. Packaged Settings was verified to disable its folder chooser during microphone startup and re-enable it after native-menu Stop.
 
-- Final code/build validation passed on `a2e664d`: https://github.com/Rafaelhajjar/local-audio/actions/runs/39060363575. All 45 tests, source checks, app packaging and artifact upload passed. This evidence update changes documentation only.
+- App-state/build validation passed on `a2e664d`: https://github.com/Rafaelhajjar/local-audio/actions/runs/39060363575. All 45 tests, source checks, app packaging and artifact upload passed.
+
+- Native-writer validation passed on `d935a71`: https://github.com/Rafaelhajjar/local-audio/actions/runs/39061835600. All **52 tests**, source checks, app packaging and artifact upload passed. The updated local app/ZIP passed strict ad hoc signature verification and checksum validation; it includes no audio, private sidecars or model weights. All 725 protected earlier-project source files still match their baseline hashes.
 
 - The Mac subsequently locked and the computer-use tool could not unlock it. The isolated test instance was closed. Remaining UI/hardware work requires manual unlock and microphone approval.
