@@ -1,6 +1,6 @@
 # Release checklist
 
-The product stays small: one local Mac app, standard microphone inputs, imported audio, optional English transcription, playback and export. These five milestones replace the earlier large planning framework. A checked source task does not establish hardware or distribution behavior.
+The product stays small: one local Mac app, standard microphone inputs, imported audio, optional English transcription, playback and export. These five milestones define the first small release. A checked source task does not establish hardware or distribution behavior.
 
 Coordinator owns shared integration, review, public repository and releases. Capture and model workers own their disjoint source areas; tests use generated fixtures. Every milestone requires a concrete result and evidence before it is called complete.
 
@@ -24,7 +24,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Persist sequential jobs, restore interrupted work, cancel children on pause/quit, and retain original audio/earlier transcripts on failure.
 - [x] Wait for saved-recording registration during quit and prevent folder changes while registration is pending.
 - [x] Packaged UI import/play/seek/title/export/relaunch and missing-file/renamed-file job retry verified using generated speech.
-- [ ] Manual recorded-date picker edit verified; metadata date persistence is covered by fixture tests.
+- [x] Manual recorded-date picker edit and restoration verified; metadata date persistence is also covered by fixture tests.
 
 ## 3. Explicit model setup and offline transcription
 
@@ -40,14 +40,15 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 
 ## 4. A reproducible public repository
 
-- [x] Fresh project/source tree with the original recorder, archive and earlier development project left separate.
+- [x] Fresh source tree; user recordings and model caches remain separate from development data.
 - [x] Retain frozen dependency source/licenses and check its file hashes. No private audio, models, logs or credentials in Git.
 - [x] Add build/package scripts, native icon, microphone usage description, bundled helper/resources and automated source/fixture checks.
 - [x] Document installation, local data locations, model sources, architecture and current limits.
 - [x] Integrated test suite, source checks and packaged build pass.
 - [x] Publish reviewed source to the new public GitHub repository and verify all required files in a fresh clone.
 - [x] Initial published revision passes hosted CI.
-- [ ] Final recovery changes pass hosted CI.
+- [x] Recovery changes pass hosted CI.
+- [ ] Final command-state changes pass hosted CI.
 
 ## 5. A usable public Mac release
 
@@ -55,7 +56,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [ ] Verify all required user flows against the exact app/ZIP being released and record test platform/device evidence.
 - [ ] Developer ID sign with hardened runtime, notarize, staple and verify Gatekeeper using authorized Apple credentials.
 - [ ] Publish tested app ZIP, checksum, source tag, supported platforms and honest limitations; keep development builds marked as previews.
-- [ ] Recheck protected project source hashes and confirm no original app/archive changes.
+- [x] Recheck protected project source hashes and confirm development did not alter existing user apps or archives.
 
 ## Evidence log
 
@@ -68,10 +69,13 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - An initial developer override under Documents waited in an OS directory-open call; temporary-folder validation succeeded. Folder loading is now visible and Settings remains available for choosing a folder. Permission keys explain user-selected protected folders. Folder permission allow/deny still requires explicit integration verification.
 - Developer ID identity was absent from this machine at the initial distribution check; ad hoc development signing is available.
 
-- Public repository: https://github.com/Rafaelhajjar/local-audio. Initial published revision `77ebed9`. Fresh public-clone source check passed all690 files/653 dependency hashes; fresh build/tests with network denied passed45 tests.
+- Public repository: https://github.com/Rafaelhajjar/local-audio. Initial published revision `77ebed9`. Fresh public-clone source check passed all 690 files / 653 dependency hashes; fresh build/tests with network denied passed 45 tests.
 - Real app model repair cancellation preserved Ready state and selection. A one-byte alteration in a disposable copied joint graph was rejected on relaunch; explicit repair reused verified staging files, downloaded the remainder, loaded Core ML and activated a new valid pack. The original downloaded test pack and existing user caches were untouched.
 - Stop-before-permission completes in the packaged UI. Real microphone validation awaits the human macOS permission choice; the computer-use tool blocks the system permission app. Automatic transcription is disabled in the isolated hardware-test state.
 
 - The current packaged UI recovered a persisted failed job after the generated audio and both sidecars were renamed. Retry used the new path, preserved original bytes and cleared the work list after success. Failed jobs now have a direct Retry action and an accurate needs-attention summary.
-- A generated910.109-second WAV completed with network/developer-cache reads denied. All70 expected repeated phrases were present, final timestamp910.08s. See VALIDATION.md for timing/memory context and limits.
+- A generated 910.109-second WAV completed with network/developer-cache reads denied. All 70 expected repeated phrases were present, final timestamp 910.08s. See VALIDATION.md for timing/memory context and limits.
 - Initial hosted CI passed: https://github.com/Rafaelhajjar/local-audio/actions/runs/39058212907. This does not establish hardware, clean-user or notarization gates.
+
+- Recovery-source CI passed: https://github.com/Rafaelhajjar/local-audio/actions/runs/39059122498.
+- Native date picker changed and saved the generated recording date, then restored it. The Recording menu now observes capture directly: Start disables and Stop enables while permission is pending; Stop returns the app to Ready. No completed microphone recording is claimed.

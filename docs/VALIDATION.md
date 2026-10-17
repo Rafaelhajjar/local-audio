@@ -9,7 +9,7 @@ Local platform: Apple M4 Pro, macOS 15.6.1, Apple Swift 6.1.2. Root targets comp
 - All 653 frozen FluidAudio source files matched the official GitHub archive for revision `9dfb81b9535e119f855f9ec9c98308ea6076cc95`.
 - Source checks passed before public publication. No weights, recordings, transcripts, app state, credentials, logs or build products were committed.
 - A fresh public clone passed source checks and all **45 tests** while network access was denied. An outer test sandbox disabled networking; SwiftPM's nested manifest sandbox was disabled to avoid nesting restrictions.
-- [Hosted CI on the initial published source](https://github.com/Rafaelhajjar/local-audio/actions/runs/39058212907) passed source checks, all tests, Apple silicon app packaging and artifact upload. Later source changes require their own passing run.
+- [Hosted CI on the initial published source](https://github.com/Rafaelhajjar/local-audio/actions/runs/39058212907) passed source checks, all tests, Apple silicon app packaging and artifact upload. [Recovery-source CI](https://github.com/Rafaelhajjar/local-audio/actions/runs/39059122498) also passed. Later code changes require their own passing run.
 - The packaged app contains its helper, model manifest, resource bundles, icon, microphone/folder usage descriptions and licenses. Its local ad hoc signature passed strict verification. ZIP checksums use portable basenames.
 
 The 45 fixture tests cover capture frame/rate integrity and completion races, model transport/integrity/retry/cancellation/rollback, packaged resource lookup, recognized graph compatibility, vocabulary extensions, copy preservation, duplicate identities, metadata/queue persistence, and worker cancellation/timeouts. They do not open a microphone or download weights.
@@ -40,10 +40,10 @@ Verified through the native app:
 
 - Import a generated AIFF, preserve source/copy SHA-256 equality, create a local transcript and display recording time-of-day timestamps.
 - Play audio, jump from the second transcript timestamp, and observe matching playback position.
-- Change a title and export a readable text file locally; preserve the audio bytes.
+- Change a title, edit/save/restore the recording date through the native picker, and export readable text locally; preserve the audio bytes.
 - Relaunch with saved library/model state. Detect a missing audio file as a failed job without replacing its previous transcript.
 - Restore the audio and its sidecars under a different filename, retain the recording identity, Retry using the current path, and clear the job after success.
-- Stop while microphone permission is pending, return to Ready, and avoid creating a false completed recording.
+- Stop while microphone permission is pending, return to Ready, and avoid creating a false completed recording. The native Recording menu disables Start and enables Stop during this state, and its Stop action works.
 
 An early developer override into Documents waited inside an OS directory-open call. Temporary-folder validation succeeded. Folder loading is now visible and Settings remains available to choose a folder. Native chooser selection and direct startup access have different permission behavior; see [Apple's folder-access documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/nsdocumentsfolderusagedescription). Protected-folder permission allow/deny remains a separate manual check.
 
@@ -53,5 +53,3 @@ An early developer override into Documents waited inside an OS directory-open ca
 - USB/interface and Bluetooth capture; unplug/sleep and sustained disk-pressure behavior. Only the built-in input was exposed on this test Mac. Other device classes remain unverified.
 - A clean user/Mac installation without developer caches and a broader set of real, consented audio. Synthetic samples cannot establish real-world ASR quality.
 - Developer ID signing, notarization, stapling and Gatekeeper assessment. No valid signing identity was installed during this run. The current ZIP is a development build.
-
-The previous development project's 725 source hashes were rechecked and all matched. The original recorder, personal archive and shared model caches were not changed by this work.

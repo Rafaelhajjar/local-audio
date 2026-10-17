@@ -26,18 +26,31 @@ struct LocalAudioApp: App {
         }
         .defaultSize(width: 1180, height: 780)
         .commands {
-            CommandGroup(after: .newItem) { Button("Import Audio…") { store.importFiles() }.keyboardShortcut("i") }
-            CommandMenu("Recording") {
-                Button("Start Recording") { Task { await store.startRecording() } }
-                    .disabled(store.capture.isRecording || store.capture.isStarting || store.capture.isFinalizing)
-                Button("Stop & Save") { Task { await store.capture.stop() } }.disabled(!store.capture.isRecording && !store.capture.isStarting)
+            CommandGroup(after: .newItem) {
+                Button("Import Audio…") { store.importFiles() }.keyboardShortcut("i")
+                    .disabled(store.isShuttingDown || store.isImporting || store.isLibraryLoading)
             }
+            RecordingCommands(store: store)
         }
         Settings { SettingsView(store: store).tint(Color.accentTeal) }
         MenuBarExtra {
             MenuBarView(store: store, showWindow: { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) })
         } label: {
             RecordingMenuIcon(capture: store.capture)
+        }
+    }
+}
+
+struct RecordingCommands: Commands {
+    @ObservedObject var store: AppStore
+    @ObservedObject private var capture: CaptureController
+    init(store: AppStore) { self.store = store; capture = store.capture }
+    var body: some Commands {
+        CommandMenu("Recording") {
+            Button("Start Recording") { Task { await store.startRecording() } }
+                .disabled(store.isShuttingDown || capture.isRecording || capture.isStarting || capture.isFinalizing)
+            Button("Stop & Save") { Task { await capture.stop() } }
+                .disabled(!capture.isRecording && !capture.isStarting)
         }
     }
 }

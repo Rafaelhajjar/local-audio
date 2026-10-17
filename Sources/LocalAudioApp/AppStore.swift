@@ -96,7 +96,7 @@ final class AppStore: ObservableObject {
     }
 
     func start() async {
-        guard !hasStarted else { return }; hasStarted = true
+        guard !hasStarted, !isShuttingDown else { return }; hasStarted = true
         async let scan: Void = refresh()
         await models.refresh()
         await scan
@@ -201,6 +201,7 @@ final class AppStore: ObservableObject {
     func retry(_ job: TranscriptionJob) async {
         guard !isShuttingDown else { return }
         await refresh()
+        guard !isShuttingDown else { return }
         guard let item = recordings.first(where: { $0.id == job.id }) else {
             errorMessage = "Reconnect the recording drive or restore the audio with its details sidecar, then retry. The existing transcript is safe."
             return
