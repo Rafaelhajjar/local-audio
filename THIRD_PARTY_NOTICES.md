@@ -1,0 +1,9 @@
+# Third-party notices
+
+LocalAudio application code is MIT licensed. Dependencies and downloaded models retain their own licenses.
+
+- **FluidAudio**, FluidInference and contributors: Apache-2.0. Frozen source snapshot declared revision `9dfb81b9535e119f855f9ec9c98308ea6076cc95`. Source: https://github.com/FluidInference/FluidAudio. Full license: `vendor/FluidAudio/LICENSE`. Additional upstream notices for fastcluster, VBx and NeMo text processing are retained in `vendor/FluidAudio/ThirdPartyLicenses/` and distributed with the app.
+- **Optional upstream NeMo text processing** is excluded from LocalAudio's root build. No Rust/NeMo binary is downloaded, linked or distributed. Its upstream source notices remain in the frozen vendor tree. LocalAudio builds the unchanged FluidAudio Swift/C/C++ sources through local targets; the selected ASR path does not invoke the optional engine.
+- **Parakeet TDT 0.6B v2**: developed by NVIDIA, converted to Core ML by FluidInference. Model license: CC-BY-4.0, https://creativecommons.org/licenses/by/4.0/. Conversion source: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml/tree/ee09c569f73759e6d44c9bd16766f477b2b36d39. Original model: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2. LocalAudio optionally installs selected unmodified compiled bundles and the vocabulary from this pinned conversion. The integrity-checked upstream model card is included in the downloaded pack. Model weights are not part of this repository or application download.
+
+All 653 files in the source snapshot manifest were compared with the official GitHub archive for the declared revision and matched. This establishes the snapshot content rather than a full Git-history audit. See `docs/MODELS.md` for exact model provenance, integrity algorithms and activation behavior.
