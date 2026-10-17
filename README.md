@@ -48,7 +48,7 @@ Model setup downloads public files from Hugging Face and its CDN. After setup, r
 
 ## Contributing and releases
 
-[Architecture](docs/ARCHITECTURE.md) · [Model setup](docs/MODELS.md) · [Release procedure](docs/RELEASE.md) · [Checklist](docs/CHECKLIST.md)
+[Architecture](docs/ARCHITECTURE.md) · [Model setup](docs/MODELS.md) · [Validation](docs/VALIDATION.md) · [Release procedure](docs/RELEASE.md) · [Checklist](docs/CHECKLIST.md)
 
 Use generated or consented audio for tests. Never commit recordings, model weights, personal metadata, logs or credentials. Small changes should preserve the straightforward folder-and-sidecar design. Open an issue with macOS/app version, device type and reproducible steps; sharing private recordings is optional.
 

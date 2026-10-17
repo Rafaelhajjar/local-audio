@@ -23,7 +23,8 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Provide playback, seeking, speed controls, transcript search, timestamp jumps and readable text export in one interface.
 - [x] Persist sequential jobs, restore interrupted work, cancel children on pause/quit, and retain original audio/earlier transcripts on failure.
 - [x] Wait for saved-recording registration during quit and prevent folder changes while registration is pending.
-- [ ] Packaged UI import/play/seek/title/date/export/relaunch flows verified using generated speech; test missing drive/file and failed job retry.
+- [x] Packaged UI import/play/seek/title/export/relaunch and missing-file/renamed-file job retry verified using generated speech.
+- [ ] Manual recorded-date picker edit verified; metadata date persistence is covered by fixture tests.
 
 ## 3. Explicit model setup and offline transcription
 
@@ -32,9 +33,10 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Keep old installs on failure; read selected external folders without modifying them. Startup performs local checks only.
 - [x] Bundle an offline helper that manually loads the selected models; no SDK automatic model discovery, repair or download.
 - [x] Wait for model setup/validation shutdown on quit and locate the model manifest within the packaged app resources.
-- [ ] Real explicit in-app download, cancellation/retry, corruption/repair and relaunch verified in isolated state.
+- [x] Real explicit in-app download, cancellation/retry, corruption/repair and relaunch verified in isolated state.
 - [x] Generated English speech transcribed by the packaged helper with network and developer build-cache reads denied; resulting words/timings reviewed.
-- [ ] Long audio and low-memory behavior characterized before broad duration claims.
+- [x] Generated 15-minute file exercises disk-backed processing and process memory was measured.
+- [ ] Broader real-audio durations and total-system memory characterized before broad performance claims.
 
 ## 4. A reproducible public repository
 
@@ -43,7 +45,9 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Add build/package scripts, native icon, microphone usage description, bundled helper/resources and automated source/fixture checks.
 - [x] Document installation, local data locations, model sources, architecture and current limits.
 - [x] Integrated test suite, source checks and packaged build pass.
-- [ ] Publish reviewed source to the new public GitHub repository; verify a fresh clone and hosted CI.
+- [x] Publish reviewed source to the new public GitHub repository and verify all required files in a fresh clone.
+- [x] Initial published revision passes hosted CI.
+- [ ] Final recovery changes pass hosted CI.
 
 ## 5. A usable public Mac release
 
@@ -55,7 +59,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 
 ## Evidence log
 
-- Model worker: 15 isolated Swift 6 fixture tests passed, including streaming transport, integrity, retry, cancellation, rollback, packaged-resource lookup and multiple shutdown waiters. No actual weights downloaded by those tests.
+- Model worker: 17 isolated Swift 6 fixture tests passed, including streaming transport, integrity, retry, cancellation, rollback, packaged-resource lookup and multiple shutdown waiters. No actual weights downloaded by those tests.
 - Capture worker: focused invariants and controller typechecking passed; final integrated count and hardware evidence pending.
 - Fresh local-source build/test with network denied: **45 tests passed**, zero failures. The optional upstream NeMo binary is excluded. The initial nested SwiftPM sandbox attempt failed to apply; the successful run used an outer deny-network profile and disabled only SwiftPM's nested manifest sandbox.
 - All **653 frozen dependency files** also matched the official GitHub archive of the declared revision.
@@ -63,3 +67,11 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - Packaged UI verified model download/activation, import, original/copy SHA-256 equality, automatic local transcript, timestamp jump/playback, title edit and local text export. Test data was generated and stored separately from existing archives.
 - An initial developer override under Documents waited in an OS directory-open call; temporary-folder validation succeeded. Folder loading is now visible and Settings remains available for choosing a folder. Permission keys explain user-selected protected folders. Folder permission allow/deny still requires explicit integration verification.
 - Developer ID identity was absent from this machine at the initial distribution check; ad hoc development signing is available.
+
+- Public repository: https://github.com/Rafaelhajjar/local-audio. Initial published revision `77ebed9`. Fresh public-clone source check passed all690 files/653 dependency hashes; fresh build/tests with network denied passed45 tests.
+- Real app model repair cancellation preserved Ready state and selection. A one-byte alteration in a disposable copied joint graph was rejected on relaunch; explicit repair reused verified staging files, downloaded the remainder, loaded Core ML and activated a new valid pack. The original downloaded test pack and existing user caches were untouched.
+- Stop-before-permission completes in the packaged UI. Real microphone validation awaits the human macOS permission choice; the computer-use tool blocks the system permission app. Automatic transcription is disabled in the isolated hardware-test state.
+
+- The current packaged UI recovered a persisted failed job after the generated audio and both sidecars were renamed. Retry used the new path, preserved original bytes and cleared the work list after success. Failed jobs now have a direct Retry action and an accurate needs-attention summary.
+- A generated910.109-second WAV completed with network/developer-cache reads denied. All70 expected repeated phrases were present, final timestamp910.08s. See VALIDATION.md for timing/memory context and limits.
+- Initial hosted CI passed: https://github.com/Rafaelhajjar/local-audio/actions/runs/39058212907. This does not establish hardware, clean-user or notarization gates.

@@ -312,14 +312,18 @@ struct SettingsView: View {
             Section("Transcription work") {
                 if store.jobs.isEmpty { Text("All caught up.").foregroundStyle(.secondary) }
                 else {
-                    Text(store.isProcessing ? "Transcribing “" + store.processingTitle + "”" : store.queuePaused ? "Paused" : models.isReady ? "Ready to continue" : "Waiting for model setup")
+                    Text(store.isProcessing ? "Transcribing “" + store.processingTitle + "”" : store.queuePaused ? "Paused" : !models.isReady ? "Waiting for model setup" : store.pendingCount > 0 ? "Ready to continue" : "Some recordings need attention")
                     ForEach(store.jobs) { job in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(job.title).font(.callout.weight(.medium))
+                            HStack {
+                                Text(job.title).font(.callout.weight(.medium))
+                                Spacer()
+                                if job.status == .failed { Button("Retry") { Task { await store.retry(job) } }.buttonStyle(.link) }
+                            }
                             if let error = job.error { Text(error).font(.caption).foregroundStyle(.orange) }
                         }
                     }
-                    Button(store.queuePaused ? "Resume" : "Pause") { store.queuePaused ? store.resumeQueue() : store.pauseQueue() }
+                    if store.pendingCount > 0 { Button(store.queuePaused ? "Resume" : "Pause") { store.queuePaused ? store.resumeQueue() : store.pauseQueue() } }
                 }
             }
             Section {

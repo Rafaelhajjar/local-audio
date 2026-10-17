@@ -198,6 +198,16 @@ final class AppStore: ObservableObject {
 
     func job(for item: AudioRecording) -> TranscriptionJob? { jobs.first { $0.id == item.id } }
 
+    func retry(_ job: TranscriptionJob) async {
+        guard !isShuttingDown else { return }
+        await refresh()
+        guard let item = recordings.first(where: { $0.id == job.id }) else {
+            errorMessage = "Reconnect the recording drive or restore the audio with its details sidecar, then retry. The existing transcript is safe."
+            return
+        }
+        enqueue(item)
+    }
+
     func resumeQueue() { queuePaused = false; processNext() }
 
     func pauseQueue() { queuePaused = true; runner?.cancel() }

@@ -140,7 +140,7 @@ enum ModelFileIntegrity {
             ? sha256.finalize().map { String(format: "%02x", $0) }.joined()
             : sha1.finalize().map { String(format: "%02x", $0) }.joined()
         guard actual == expected.digest.lowercased() else {
-            throw ModelSetupError.message("Model checksum failed: \(expected.path). The download was not activated; retry installation.")
+            throw ModelSetupError.message("Model checksum failed: \(expected.path). This model file was rejected. Download or repair the English model in Settings.")
         }
     }
 }
