@@ -1,11 +1,23 @@
 # Release procedure
 
-1. Run `python3 scripts/check-source.py` and `swift test --scratch-path .build/integration`.
-2. Run `./scripts/build-app.sh`. Test the bundled app, not only `swift run`: it includes the helper, model manifest, icon, usage description and licenses.
-3. Use isolated app-state/recording folders and generated speech to verify explicit model download, cancellation/retry, relaunch, import, transcription with network denied, playback, timestamp seeking and text export. Verify recording separately with consented hardware tests: permission allow/deny, default and explicit devices, stop, silence, unplug and quit. Record exact evidence in CHECKLIST.md.
-4. On a clean Mac/user account, verify permissions, model setup and complete workflow without developer caches. Test each claimed hardware class. Keep unsupported/unverified claims out of the release notes.
-5. For public distribution, use a Developer ID Application certificate and Apple notary credentials. Build with `SIGN_IDENTITY='Developer ID Application: ...' VERSION=0.1.0 ./scripts/build-app.sh`. The script applies hardened runtime and microphone entitlement to the main app. Verify `codesign --verify --strict --deep --verbose=2 dist/LocalAudio.app`.
-6. Set `NOTARY_PROFILE` to a configured `notarytool` keychain profile and run `./scripts/notarize.sh`. Review Apple's result; only an Accepted response plus successful staple/assessment establishes notarization. Do not publish signing credentials or export certificates into the repository.
-7. Publish the tested signed/stapled ZIP and SHA-256 with a Git tag/release and concise known limits. A development preview must be marked prerelease and must clearly describe its ad hoc signature. Hosted CI success does not establish real microphone, ASR accuracy or Gatekeeper behavior.
+## Development preview
 
-The repository does not contain a signing identity, provisioning profile or notary credentials. A local ad hoc build is reviewable and runnable on the developer machine but is not a substitute for public Gatekeeper validation. Do not instruct users to disable security protections.
+The current accepted scope is an ad hoc, unnotarized development prerelease. Developer ID access is unavailable. Keep production checks open and describe observed compatibility precisely.
+
+1. Run `python3 scripts/check-source.py` and `swift test --scratch-path .build/integration`.
+2. Run `./scripts/build-app.sh`. Test the bundled app: it includes the helper, model manifest, icon, usage descriptions and licenses. Do not substitute `swift run` evidence for packaged behavior.
+3. Use isolated app-state/recording folders and generated speech to verify explicit model setup, cancellation/repair, import, offline transcription, playback, timestamp seeking, export and recovery. Separately verify consented physical capture, Stop & Save, quit while recording and relaunch. Record exact results and untested cases in VALIDATION.md and CHECKLIST.md. Keep private audio and model weights out of Git and release assets.
+4. Verify the exact app's ad hoc signature with `codesign --verify --strict --deep --verbose=2 dist/LocalAudio.app` and check `SHA256SUMS.txt` from `dist/`. Ensure the ZIP includes its helper/resources but no test data or weights.
+5. Publish that exact ZIP and checksum with a matching source tag, marked **prerelease**. State Apple silicon/macOS 15+, ad hoc signing, absent notarization, unverified clean-Mac/Gatekeeper installation, observed device evidence and remaining limitations. A downloaded copy may be blocked by macOS; retain the README's source-build route and do not instruct users to disable security protections.
+
+The current preview has 52 passing tests in hosted CI, generated-speech offline checks, built-in capture/save/playback/quit evidence and a limited system-default AirPods silence result. See VALIDATION.md for details. CI success is not a general hardware, ASR accuracy or Gatekeeper guarantee.
+
+## Future production release
+
+1. Complete physical permission allow/deny, default/explicit devices, silence/no-buffer failure, USB/interface and Bluetooth speech, unplug/sleep, sustained disk pressure and quit checks. Test each claimed hardware class.
+2. On a clean Mac/user account, verify permissions, model setup and complete workflow without developer caches. Characterize broader real-audio quality and total-system memory before making performance claims.
+3. Use a Developer ID Application certificate and Apple notary credentials. Build with `SIGN_IDENTITY='Developer ID Application: ...' VERSION=0.1.0 ./scripts/build-app.sh`. The script applies hardened runtime and microphone entitlement. Verify the app's strict signature.
+4. Set `NOTARY_PROFILE` to a configured `notarytool` keychain profile and run `./scripts/notarize.sh`. Only Apple's Accepted response plus successful stapling and Gatekeeper assessment establishes notarization. Never put credentials or exported certificates in the repository.
+5. Publish the exact tested signed/stapled ZIP, checksum, source tag and concise compatibility/limitation notes. Update the production checklist only with observed evidence.
+
+The repository contains no signing identity, provisioning profile or notary credentials. An ad hoc preview does not substitute for public Gatekeeper validation.

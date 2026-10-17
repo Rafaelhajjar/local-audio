@@ -19,7 +19,21 @@ The current local suite passes **52 tests** with networking denied. It covers ca
 
 Seven generated-audio tests use the same `PCMRecordingWriter` as microphone capture, through actual `AVAssetWriter` appends, finalization, `AVAudioFile` reopening and publication. Generated buffers start at a nonzero timestamp and are paced at their represented cadence. Saved 48 kHz stereo and 16 kHz mono CAF files preserve every decoded Int16 sample, channel position, frame count and sample rate without inserting a timestamp prefix. Silence also saves correctly.
 
-Empty input publishes nothing. A format change rejects the new buffer while retaining the valid prefix. A previously claimed completion gate permits finalization but suppresses publication. An existing destination is never replaced; the completed staging file remains readable for recovery. These tests exercise native filesystem and codec behavior without capture sessions, device enumeration, microphone access, private audio or model loading. Physical device and permission checks remain separate release gates.
+Empty input publishes nothing. A format change rejects the new buffer while retaining the valid prefix. A previously claimed completion gate permits finalization but suppresses publication. An existing destination is never replaced; the completed staging file remains readable for recovery. These tests exercise native filesystem and codec behavior without capture sessions, device enumeration, microphone access, private audio or model loading. Physical evidence is separate below.
+
+## Packaged microphone capture
+
+After the owner approved macOS microphone access, the exact ad hoc app in the preview ZIP was tested on the Mac above. ZIP SHA-256: `59a59bac991c98a1d3124e9603c8a2af2066ee73463742819cad1891c7cc68b4`. Tests used isolated state/recording folders with automatic transcription disabled; microphone audio stayed local and was not committed or uploaded.
+
+| Physical check | Saved result |
+| --- | --- |
+| Explicit MacBook Pro microphone, Stop & Save | 44.1 kHz mono; 347,136 frames; 7.8716 seconds; nonzero decoded PCM |
+| Quit during built-in recording | 44.1 kHz mono; 215,040 frames; 4.8762 seconds; readable CAF and metadata after process exit |
+| System default, resolving to connected AirPods Pro | 24 kHz mono; 204,960 frames; 8.54 seconds; all-zero PCM saved as valid silence |
+
+The built-in test showed Recording only after successful audio appends, a positive-size hidden staging file during capture, and Ready after Stop & Save. The saved file reopened and decoded fully; UI playback advanced normally. Quit saved the active recording and metadata before exit. Relaunch restored the recordings, system-default selection and local model readiness. No incomplete recording or pending transcription job remained, and the isolated test app was closed after verification.
+
+The AirPods result verifies the default-input path, valid PCM delivery, silence handling and finalization. It does not establish Bluetooth speech capture quality. USB/interface capture, Bluetooth speech, unplug/sleep, permission denial and sustained disk-pressure behavior remain unverified.
 
 ## Real model and generated audio
 
@@ -54,9 +68,8 @@ Verified through the native app:
 
 An early developer override into Documents waited inside an OS directory-open call. Temporary-folder validation succeeded. Folder loading is now visible and Settings remains available to choose a folder. Native chooser selection and direct startup access have different permission behavior; see [Apple's folder-access documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/nsdocumentsfolderusagedescription). Protected-folder permission allow/deny remains a separate manual check.
 
-## Remaining release gates
+## Deferred production validation
 
-- Human microphone permission, actual built-in capture/save/playback and quit-during-recording. The computer-use tool blocks the macOS system permission app; no bypass was attempted. Automatic transcription is off in the isolated hardware test state. The Mac subsequently locked; the isolated test instance was closed, and manual unlock is required before further UI checks.
-- USB/interface and Bluetooth capture; unplug/sleep and sustained disk-pressure behavior. Only the built-in input was exposed on this test Mac. Other device classes remain unverified.
+- Packaged permission denial, missing-buffer failures, USB/interface capture and broader Bluetooth speech behavior; unplug/sleep and sustained disk-pressure checks. The limited AirPods silence result above does not prove these cases.
 - A clean user/Mac installation without developer caches and a broader set of real, consented audio. Synthetic samples cannot establish real-world ASR quality.
-- Developer ID signing, notarization, stapling and Gatekeeper assessment. No valid signing identity was installed during this run. The current ZIP is a development build.
+- Developer ID signing, notarization, stapling and Gatekeeper assessment. No valid signing identity was installed during this run. The owner explicitly chose development-preview scope; the current ZIP is ad hoc signed and unnotarized, and a downloaded copy may be blocked by macOS.

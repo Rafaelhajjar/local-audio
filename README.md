@@ -4,7 +4,7 @@ A small native Mac app for recording, listening and turning audio into text loca
 
 Choose a microphone, press Record, and stop when you are finished. Or import an existing audio file. Install the optional English model in Settings once, then transcribe without an internet connection. No account, server, telemetry or audio upload.
 
-**Development preview.** Apple silicon, macOS 15 or newer. The app is being validated; a Developer ID signed and notarized public installer is not available yet. Build from source below. See [the release checklist](docs/CHECKLIST.md) for evidence and remaining work.
+**Development preview.** Apple silicon, macOS 15 or newer. [Preview ZIP and checksum](https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.1.0-preview.1). The app is ad hoc signed and unnotarized; Gatekeeper and clean-Mac installation are unverified, so macOS may block the downloaded build. Build-from-source instructions are below. See [validation evidence](docs/VALIDATION.md) and [the release checklist](docs/CHECKLIST.md) for tested behavior and remaining work.
 
 ## What it does
 
