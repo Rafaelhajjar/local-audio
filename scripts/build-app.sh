@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ROOT="$PWD"
+ROOT="$(pwd -P)"
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
@@ -10,7 +10,9 @@ SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 [[ "$(uname -s)" == Darwin ]] || { echo 'Build this Mac app on macOS.' >&2; exit 2; }
 swift build --scratch-path .build/app --arch arm64 -c release
 BIN="$(swift build --scratch-path .build/app --arch arm64 -c release --show-bin-path)"
+[[ ! -L dist ]] || { echo 'dist must be a real folder inside this checkout.' >&2; exit 2; }
 mkdir -p dist
+[[ ! -L "$ROOT/dist/LocalAudio.app" ]] || { echo 'Refusing to replace a linked app destination.' >&2; exit 2; }
 STAGING="$(mktemp -d "$ROOT/dist/.package.XXXXXX")"
 trap 'rm -rf "$STAGING"' EXIT
 APP="$STAGING/LocalAudio.app"
