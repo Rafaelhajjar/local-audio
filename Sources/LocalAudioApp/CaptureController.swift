@@ -263,7 +263,7 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
                         self.sessionQueue.async { [weak self] in self?.stopSession(id: id) }
                         return
                     }
-                    self.run = CaptureRun(operation: operation, outputID: ObjectIdentifier(output))
+                    self.run = CaptureRun(operation: operation, outputID: ObjectIdentifier(output), callbackQueue: self.audioQueue)
                 }
                 self.installWatchdog(id: id)
                 self.session.startRunning()
@@ -349,45 +349,16 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
         guard let run, run.outputID == ObjectIdentifier(output), !run.isFinalizing, !stopGate.isStopped(run.id) else { return }
         run.lastSampleUptime = ProcessInfo.processInfo.systemUptime
         do {
-            guard CMSampleBufferIsValid(sampleBuffer), CMSampleBufferDataIsReady(sampleBuffer),
-                  let format = CMSampleBufferGetFormatDescription(sampleBuffer),
-                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
-                  asbd.mFormatID == kAudioFormatLinearPCM else {
-                throw CaptureFailure("The selected microphone delivered an unsupported or invalid audio buffer.")
-            }
-            if let sourceFormat = run.sourceFormat, !CFEqual(sourceFormat, format) {
-                throw CaptureFailure("The microphone audio format changed during recording. Recording stopped before mixing formats.")
-            }
-            let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-            let nextProgress = try run.progress.appending(frames: Int64(CMSampleBufferGetNumSamples(sampleBuffer)),
-                at: CMTimeGetSeconds(timestamp), sampleRate: asbd.mSampleRate)
-            if run.writer == nil {
-                let writer = try AVAssetWriter(outputURL: run.url, fileType: .caf)
-                let input = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: format)
-                input.expectsMediaDataInRealTime = true
-                guard writer.canAdd(input) else { throw CaptureFailure("The microphone PCM format cannot be saved as CAF.") }
-                writer.add(input)
-                run.writer = writer
-                run.input = input
-                run.sourceFormat = format
-                guard writer.startWriting() else { throw CaptureFailure(writer.error?.localizedDescription ?? "The audio file writer could not start.") }
-                writer.startSession(atSourceTime: timestamp)
-            }
-            guard let writer = run.writer, writer.status == .writing, let input = run.input else {
-                throw CaptureFailure(run.writer?.error?.localizedDescription ?? "The audio writer stopped unexpectedly.")
-            }
-            guard input.isReadyForMoreMediaData else {
-                throw CaptureFailure("The disk could not keep up with the microphone. Recording stopped to avoid silently dropping audio.")
-            }
-            guard input.append(sampleBuffer) else {
-                throw CaptureFailure(writer.error?.localizedDescription ?? "The audio writer rejected a microphone buffer.")
-            }
-            let wasFirst = run.progress.frames == 0
-            run.progress = nextProgress
+            let wasFirst = try run.writer.append(sampleBuffer)
             if wasFirst { emit(.started(run.id)) }
             if wasFirst || run.lastSampleUptime - run.lastMeterUptime >= 0.1 {
                 run.lastMeterUptime = run.lastSampleUptime
-                emit(.meter(run.id, peakDB(sampleBuffer, format: asbd), run.progress.elapsed))
+                let level: Double
+                if let format = CMSampleBufferGetFormatDescription(sampleBuffer),
+                   let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee {
+                    level = peakDB(sampleBuffer, format: asbd)
+                } else { level = -160 }
+                emit(.meter(run.id, level, run.progress.elapsed))
             }
         } catch {
             requestStop(id: run.id, reason: "Recording stopped: " + error.localizedDescription)
@@ -395,67 +366,23 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
     }
 
     private func finalize(_ run: CaptureRun) {
-        guard let writer = run.writer else {
-            complete(run, result: .cancelled(run.stopReason ?? "No audio was received; no recording was saved."))
-            return
-        }
-        guard writer.status == .writing else {
-            complete(run, result: .failed(run.stopReason ?? writer.error?.localizedDescription ?? "The audio writer could not finalize the recording.", recoverableURL(run)))
-            return
-        }
-        run.input?.markAsFinished()
-        run.finalizationInFlight = true
-        writer.finishWriting { [weak self, run] in
-            self?.audioQueue.async { [weak self, run] in
-                guard let self else { return }
-                run.finalizationInFlight = false
-                guard !run.operation.completion.isCompleted else {
-                    if self.run === run { self.run = nil }
-                    return
-                }
-                guard writer.status == .completed else {
-                    self.complete(run, result: .failed(writer.error?.localizedDescription ?? run.stopReason ?? "The recording could not be finalized.", self.recoverableURL(run)))
-                    return
-                }
-                do {
-                    let file = try AVAudioFile(forReading: run.url)
-                    try run.progress.verify(finalFrames: file.length, sampleRate: file.fileFormat.sampleRate)
-                    let values = try run.url.resourceValues(forKeys: [.fileSizeKey])
-                    guard (values.fileSize ?? 0) > 0 else { throw CaptureFailure("The finalized audio file is empty.") }
-                    // Claim completion before the rename so a timeout cannot
-                    // concurrently report the staging path while it publishes.
-                    guard run.operation.completion.claim() else {
-                        if self.run === run { self.run = nil }
-                        return
-                    }
-                    // Same-folder rename publishes only verified complete audio.
-                    // A UUID destination is never overwritten.
-                    let result: CaptureResult
-                    do {
-                        try FileManager.default.moveItem(at: run.url, to: run.publishedURL)
-                        result = .saved(run.publishedURL, run.progress.elapsed, run.stopReason)
-                    } catch {
-                        result = .failed("The completed audio could not be moved into the recording library: " + error.localizedDescription, self.recoverableURL(run))
-                    }
-                    if self.run === run { self.run = nil }
-                    self.finishClaimed(run.operation, result: result)
-                } catch {
-                    self.complete(run, result: .failed("The saved recording could not be verified: " + error.localizedDescription, self.recoverableURL(run)))
-                }
+        run.writer.finish { [weak self, run] outcome in
+            guard let self else { return }
+            if self.run === run { self.run = nil }
+            switch outcome {
+            case let .saved(url, elapsed):
+                self.finishClaimed(run.operation, result: .saved(url, elapsed, run.stopReason))
+            case .empty:
+                self.finishClaimed(run.operation, result: .cancelled(run.stopReason ?? "No audio was received; no recording was saved."))
+            case let .failed(message, recovery):
+                let detail = run.stopReason.map { $0 + " " + message } ?? message
+                self.finishClaimed(run.operation, result: .failed(detail, recovery))
+            case .suppressed:
+                // The independent deadline already reported completion. The
+                // writer closed its staging file without publishing it.
+                break
             }
         }
-    }
-
-    private func recoverableURL(_ run: CaptureRun) -> URL? {
-        guard FileManager.default.fileExists(atPath: run.url.path) else { return nil }
-        // Never cancel, delete or rename failed/in-flight original audio.
-        // The hidden staging name explicitly identifies it as incomplete.
-        return run.url
-    }
-
-    private func complete(_ run: CaptureRun, result: CaptureResult) {
-        if self.run === run { self.run = nil }
-        finish(run.operation, result: result)
     }
 
     private func peakDB(_ sampleBuffer: CMSampleBuffer, format: AudioStreamBasicDescription) -> Double {
@@ -490,20 +417,20 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
 private final class CaptureRun {
     let operation: CaptureOperation
     var id: UUID { operation.id }
-    var url: URL { operation.stagingURL }
-    var publishedURL: URL { operation.publishedURL }
     let outputID: ObjectIdentifier
-    var writer: AVAssetWriter?
-    var input: AVAssetWriterInput?
-    var sourceFormat: CMFormatDescription?
-    var progress = CaptureProgress()
+    let writer: PCMRecordingWriter
+    var progress: CaptureProgress { writer.progress }
     var isFinalizing = false
-    var finalizationInFlight = false
     var stopReason: String?
     var lastSampleUptime = ProcessInfo.processInfo.systemUptime
     var lastMeterUptime = 0.0
 
-    init(operation: CaptureOperation, outputID: ObjectIdentifier) { self.operation = operation; self.outputID = outputID }
+    init(operation: CaptureOperation, outputID: ObjectIdentifier, callbackQueue: DispatchQueue) {
+        self.operation = operation
+        self.outputID = outputID
+        writer = PCMRecordingWriter(stagingURL: operation.stagingURL, publishedURL: operation.publishedURL,
+            completionGate: operation.completion, callbackQueue: callbackQueue)
+    }
 }
 
 private final class CaptureOperation {

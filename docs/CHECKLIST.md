@@ -12,6 +12,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Save unique CAF originals through hidden staging; stop intentionally, including during startup. Silence remains valid audio.
 - [x] Surface buffer, disk, missing input, runtime and device-disconnect failures. Never silently switch an explicitly chosen device mid-recording.
 - [x] Bound finalization independently from the writer queue; reopen/verify rate and frames before publishing a completed recording. Preserve/report incomplete recovery files on failure.
+- [x] Exercise the production CAF writer with generated mono/stereo PCM; verify exact decoded samples and safe silence, empty-input, format-change, completion-denied and destination-collision behavior.
 - [ ] Packaged-app permission allow/deny, deliberate stop, quit during recording, silence and no-audio failures verified.
 - [ ] Built-in, USB/interface and Bluetooth classes each tested; publish only the compatibility actually established.
 
@@ -61,7 +62,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 ## Evidence log
 
 - Model worker: 17 isolated Swift 6 fixture tests passed, including streaming transport, integrity, retry, cancellation, rollback, packaged-resource lookup and multiple shutdown waiters. No actual weights downloaded by those tests.
-- Capture worker: focused invariants and controller typechecking passed; final integrated count and hardware evidence pending.
+- Capture worker: 13 capture invariant tests and seven actual native CAF writer tests passed. The integrated suite now passes **52 tests** with networking denied. No microphone or device enumeration was used by these tests; hardware evidence remains pending.
 - Fresh local-source build/test with network denied: **45 tests passed**, zero failures. The optional upstream NeMo binary is excluded. The initial nested SwiftPM sandbox attempt failed to apply; the successful run used an outer deny-network profile and disabled only SwiftPM's nested manifest sandbox.
 - All **653 frozen dependency files** also matched the official GitHub archive of the declared revision.
 - Packaged helper transcribed generated 13-second English speech with network and all `.build` reads denied. Words matched the intended sample; this is a functional smoke test, not an ASR accuracy benchmark.
