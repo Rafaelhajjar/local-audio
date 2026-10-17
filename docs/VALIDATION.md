@@ -49,7 +49,7 @@ An early developer override into Documents waited inside an OS directory-open ca
 
 ## Remaining release gates
 
-- Human microphone permission, actual built-in capture/save/playback and quit-during-recording. The computer-use tool blocks the macOS system permission app; no bypass was attempted. Automatic transcription is off in the isolated hardware test state.
+- Human microphone permission, actual built-in capture/save/playback and quit-during-recording. The computer-use tool blocks the macOS system permission app; no bypass was attempted. Automatic transcription is off in the isolated hardware test state. The Mac subsequently locked; the isolated test instance was closed, and manual unlock is required before further UI checks.
 - USB/interface and Bluetooth capture; unplug/sleep and sustained disk-pressure behavior. Only the built-in input was exposed on this test Mac. Other device classes remain unverified.
 - A clean user/Mac installation without developer caches and a broader set of real, consented audio. Synthetic samples cannot establish real-world ASR quality.
 - Developer ID signing, notarization, stapling and Gatekeeper assessment. No valid signing identity was installed during this run. The current ZIP is a development build.
