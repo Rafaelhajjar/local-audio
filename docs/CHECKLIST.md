@@ -48,7 +48,7 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - [x] Publish reviewed source to the new public GitHub repository and verify all required files in a fresh clone.
 - [x] Initial published revision passes hosted CI.
 - [x] Recovery changes pass hosted CI.
-- [ ] Final command-state changes pass hosted CI.
+- [x] Final command-state, shared-state and packaging changes pass hosted CI.
 
 ## 5. A usable public Mac release
 
@@ -81,3 +81,5 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 - Native date picker changed and saved the generated recording date, then restored it. The Recording menu now observes capture directly: Start disables and Stop enables while permission is pending; Stop returns the app to Ready. No completed microphone recording is claimed.
 
 - Capture/model readiness now propagates to dependent store views without forwarding audio-meter ticks. Packaged Settings was verified to disable its folder chooser during microphone startup and re-enable it after native-menu Stop.
+
+- Final code/build validation passed on `a2e664d`: https://github.com/Rafaelhajjar/local-audio/actions/runs/39060363575. All45 tests, source checks, app packaging and artifact upload passed. This evidence update changes documentation only.
