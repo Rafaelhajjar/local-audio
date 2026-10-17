@@ -79,3 +79,5 @@ Coordinator owns shared integration, review, public repository and releases. Cap
 
 - Recovery-source CI passed: https://github.com/Rafaelhajjar/local-audio/actions/runs/39059122498.
 - Native date picker changed and saved the generated recording date, then restored it. The Recording menu now observes capture directly: Start disables and Stop enables while permission is pending; Stop returns the app to Ready. No completed microphone recording is claimed.
+
+- Capture/model readiness now propagates to dependent store views without forwarding audio-meter ticks. Packaged Settings was verified to disable its folder chooser during microphone startup and re-enable it after native-menu Stop.

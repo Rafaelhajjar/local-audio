@@ -14,9 +14,7 @@ func clock(_ seconds: Double) -> String {
 
 struct RootView: View {
     @ObservedObject var store: AppStore
-    @ObservedObject private var models: ModelManager
     @State private var section = "record"
-    init(store: AppStore) { self.store = store; models = store.models }
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -41,7 +39,6 @@ struct RootView: View {
             else { LibraryView(store: store, record: { section = "record" }) }
         }
         .disabled(store.isShuttingDown)
-        .onReceive(models.$isReady) { if $0 { store.processNext() } }
         .alert("LocalAudio", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }

@@ -43,7 +43,7 @@ Verified through the native app:
 - Change a title, edit/save/restore the recording date through the native picker, and export readable text locally; preserve the audio bytes.
 - Relaunch with saved library/model state. Detect a missing audio file as a failed job without replacing its previous transcript.
 - Restore the audio and its sidecars under a different filename, retain the recording identity, Retry using the current path, and clear the job after success.
-- Stop while microphone permission is pending, return to Ready, and avoid creating a false completed recording. The native Recording menu disables Start and enables Stop during this state, and its Stop action works.
+- Stop while microphone permission is pending, return to Ready, and avoid creating a false completed recording. The native Recording menu disables Start and enables Stop during this state, and its Stop action works. Settings also disables the recording-folder chooser while capture is starting and re-enables it after Stop.
 
 An early developer override into Documents waited inside an OS directory-open call. Temporary-folder validation succeeded. Folder loading is now visible and Settings remains available to choose a folder. Native chooser selection and direct startup access have different permission behavior; see [Apple's folder-access documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/nsdocumentsfolderusagedescription). Protected-folder permission allow/deny remains a separate manual check.
 

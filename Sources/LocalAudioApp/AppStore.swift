@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
@@ -43,6 +44,7 @@ final class AppStore: ObservableObject {
     private var preferencesWritable = true
     private var hasStarted = false
     private var latestScanID = UUID()
+    private var presentationUpdates = Set<AnyCancellable>()
 
     var selected: AudioRecording? { recordings.first { $0.id == selection } }
     var pendingCount: Int { jobs.filter { $0.status != .failed }.count }
@@ -93,6 +95,15 @@ final class AppStore: ObservableObject {
             }
         }
         errorMessage = initialError
+        // Computed store values depend on nested state. Forward state changes,
+        // while keeping high-frequency audio meter updates in the capture view.
+        capture.$isRecording.combineLatest(capture.$isStarting, capture.$isFinalizing)
+            .removeDuplicates { a, b in a.0 == b.0 && a.1 == b.1 && a.2 == b.2 }
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &presentationUpdates)
+        models.$isReady.removeDuplicates()
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &presentationUpdates)
     }
 
     func start() async {
