@@ -12,7 +12,7 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - [x] Explicit in-app model setup and packaged offline transcription verified with generated speech.
 - [x] Packaged built-in microphone capture/save/playback, graceful quit while recording and relaunch verified.
 - [x] System-default input path saved valid 24 kHz mono silence from connected AirPods Pro; Bluetooth speech quality remains unverified.
-- [ ] Publish the exact tested ZIP, checksum and matching source tag as a clearly limited, ad hoc, unnotarized prerelease.
+- [x] Publish the exact tested ZIP, checksum and matching source tag as a clearly limited, ad hoc, unnotarized prerelease. Anonymous public downloads match the local bytes.
 
 ## 1. A reliable recorder
 
@@ -68,7 +68,7 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - [ ] Validate from a clean user/Mac without developer model or build caches; no account required.
 - [ ] Verify all required user flows against the exact app/ZIP being released and record test platform/device evidence.
 - [ ] Developer ID sign with hardened runtime, notarize, staple and verify Gatekeeper using authorized Apple credentials.
-- [ ] Publish tested app ZIP, checksum, source tag, supported platforms and honest limitations; keep development builds marked as previews.
+- [ ] Publish the tested signed/notarized production app ZIP, checksum, source tag, supported platforms and honest limitations.
 - [x] Recheck protected project source hashes and confirm development did not alter existing user apps or archives.
 
 ## Evidence log
@@ -101,3 +101,4 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 
 - After human microphone approval, the exact packaged app saved 7.8716 seconds of built-in 44.1 kHz mono audio (347,136 decoded frames), played it in the UI, and returned to Ready. Quitting during another recording produced 4.8762 seconds (215,040 frames), saved metadata and exited with no incomplete file or pending job. Relaunch restored the saved library.
 - The system-default path resolved to connected AirPods Pro and saved 8.54 seconds of 24 kHz mono PCM (204,960 frames). Every sample was zero: this verifies valid-silence handling and finalization, not Bluetooth speech quality. No microphone audio or derived transcript was uploaded or committed. The isolated test app was closed after verification.
+- Development preview published: https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.1.0-preview.1. Source tag points to `a46aa38`; runtime/build sources match CI-validated `d935a71`. Anonymous ZIP/checksum downloads match the tested local files. ZIP SHA-256: `59a59bac991c98a1d3124e9603c8a2af2066ee73463742819cad1891c7cc68b4`.
