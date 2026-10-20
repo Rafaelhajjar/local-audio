@@ -24,12 +24,22 @@ struct RecordingVoicesView: View {
                     ProgressView().controlSize(.small)
                     Button("Cancel") { voices.cancel() }
                 } else {
-                    Button(voices.analysis == nil ? "Find Voices" : "Analyze Again") { Task { await voices.analyze(item) } }
+                    Button(voices.analysis == nil ? "Find Voices" : voices.preservesReviewedTurns ? "Update Voice Matching" : "Analyze Again") {
+                        Task {
+                            if voices.preservesReviewedTurns { await voices.updateVoiceMatching(item) }
+                            else { await voices.analyze(item) }
+                        }
+                    }
                         .disabled(!models.isReady || models.isBusy || store.isProcessing || voices.isEditing)
                 }
             }
             Text("Names stay Unknown until you confirm them. Possible matches are experimental suggestions; they never name or train a voice automatically.")
                 .font(.caption).foregroundStyle(.secondary)
+            if voices.needsMatchingUpdate {
+                Text("Update voice matching to use the improved recognition. Your confirmed names and reviewed turns are kept.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            if voices.isAnalyzing { Text(voices.status).font(.callout).foregroundStyle(.secondary) }
             if let error = voices.error { VoiceErrorBanner(voices: voices, message: error) }
             if voices.isLoading {
                 ProgressView("Reading saved voice analysis…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -150,13 +160,31 @@ struct NameVoiceSheet: View {
 }
 
 struct PeopleView: View {
-    @ObservedObject var voices: VoiceController
+    @ObservedObject var store: AppStore
+    @ObservedObject private var voices: VoiceController
     @State private var renaming: VoiceProfile?
     @State private var forgetting: VoiceProfile?
+    init(store: AppStore) { self.store = store; voices = store.voices }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("People").font(.largeTitle.weight(.bold))
+            HStack {
+                Text("People").font(.largeTitle.weight(.bold))
+                Spacer()
+                if voices.isAnalyzing {
+                    ProgressView().controlSize(.small)
+                    Button("Cancel") { voices.cancel() }
+                } else if voices.outdatedExampleCount > 0 {
+                    Button("Update Saved Voices") { Task { await voices.updateSavedVoices(in: store.recordings) } }
+                        .disabled(voices.isBusy || !voices.models.isReady || store.isProcessing || store.isLibraryLoading)
+                }
+            }
             Text("Names and voice examples stay on this Mac. Only your confirmations add examples; recognition suggestions never train profiles.").foregroundStyle(.secondary)
+            if voices.outdatedExampleCount > 0 {
+                Text("\(voices.outdatedExampleCount) saved example(s) can be updated for improved matching. Keep the original recordings available in Library. Your confirmed names are kept.")
+                    .font(.callout).foregroundStyle(.secondary)
+                if !voices.models.isReady { Text("Set up the speaker model in Settings to update them.").font(.caption).foregroundStyle(.secondary) }
+            }
+            Text(voices.status).font(.caption).foregroundStyle(.secondary)
             if let error = voices.error { VoiceErrorBanner(voices: voices, message: error) }
             if voices.profiles.isEmpty {
                 ContentUnavailableView("No saved voices yet", systemImage: "person.2", description: Text("Open a recording in Library, choose Voices, and name a voice after listening. Your saved people will appear here."))

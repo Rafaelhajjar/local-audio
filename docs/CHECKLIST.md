@@ -27,6 +27,15 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - [x] Packaged in-app model setup, generated same-voice suggestion/confirm/revoke and different-voice offline control verified.
 - [ ] Real consented multi-person evaluation across microphones, rooms, accents and days. Suggestions are experimental, with no calibrated identity-accuracy claim.
 
+## Improved voice matching (0.2.1 preview)
+
+- [x] Integrate original-duration pooling over repeated short clips, speech-weighted excerpts and source-balanced profile matching.
+- [x] Keep legacy/current extraction recipes separate and preserve reviewed turn geometry, human confirmation IDs/dates and enrollment history during updates.
+- [x] Provide Update Voice Matching and Update Saved Voices; preserve missing originals and exclude unusable refreshed examples until a successful retry.
+- [x] Pass all 112 generated-fixture tests with networking denied and retain all 653 frozen dependency hashes.
+- [x] Rebuild the Apple silicon app, verify its strict ad hoc signature and confirm every packaged file matches the exact previously tested 0.2.1 ZIP.
+- [ ] Independently validate useful matching coverage and wrong suggestions on broader consented recordings. Development agreement is not general identity accuracy.
+
 ## 1. A reliable recorder
 
 - [x] Enumerate normal AVFoundation inputs and offer system default plus explicit selection, without DJI-specific filtering.

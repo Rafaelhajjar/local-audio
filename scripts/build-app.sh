@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd -P)"
-VERSION="${VERSION:-0.2.0}"
-BUILD_NUMBER="${BUILD_NUMBER:-1}"
+VERSION="${VERSION:-0.2.1}"
+BUILD_NUMBER="${BUILD_NUMBER:-2}"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'VERSION must be x.y.z' >&2; exit 2; }
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo 'BUILD_NUMBER must be numeric' >&2; exit 2; }

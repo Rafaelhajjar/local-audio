@@ -5,6 +5,21 @@ import FluidAudio
 import class FluidAudio.AudioConverter
 import LocalAudioCore
 
+/// Evaluation-only padding modes. Repetition adds no independent voice evidence.
+enum ClipPaddingMode: String, Decodable {
+    case zero
+    case repeatOriginalMask = "repeat-original-mask"
+    case repeatFullMask = "repeat-full-mask"
+
+    var recipeID: String {
+        switch self {
+        case .zero: return BatchClipEmbeddings.recipeID
+        case .repeatOriginalMask: return "localaudio-clip-v1-native-crop-resample16k-periodic10s-original-mask589-l2"
+        case .repeatFullMask: return "localaudio-clip-v1-native-crop-resample16k-periodic10s-full-mask589-l2"
+        }
+    }
+}
+
 final class ClipEmbedder {
     private let models: OfflineDiarizerModels
     private let converter = AudioConverter(sampleRate: 16_000)
@@ -71,6 +86,69 @@ final class ClipEmbedder {
         let samples = try converter.resampleBuffer(buffer)
         guard SpeakerClipPolicy.hasUsableSignal(samples) else { return nil }
         return SpeakerClipPolicy.normalizedEmbedding(try embedding(samples: samples))
+    }
+
+    /// Batch-only diagnostics repeat the baseline crop/resample operation so
+    /// production extraction stays byte-for-byte unchanged. No speech score is
+    /// used to change an embedding or decide a person's identity.
+    func diagnostics(source: URL, span: SpeakerSampleSpan) throws -> ClipSegmentationDiagnostics {
+        let samples = try experimentSamples(source: source, span: span)
+        try Task.checkCancellation()
+        let audio = try audioArray(samples)
+        let result = try models.segmentationModel.prediction(from: MLDictionaryFeatureProvider(dictionary: ["audio": MLFeatureValue(multiArray: audio)]))
+        guard let output = result.featureValue(for: "log_probs")?.multiArrayValue,
+              output.shape.map({ $0.intValue }) == [1, 589, 7] else {
+            throw Speakers.failure("Segmentation diagnostics require native shape [1,589,7].")
+        }
+        let rows = (0..<589).map { frame in
+            (0..<7).map { cls in output[[0, NSNumber(value: frame), NSNumber(value: cls)]].doubleValue }
+        }
+        return try ClipSegmentationDiagnostics.calculate(samples: samples, logProbabilities: rows)
+    }
+
+    /// Separate from production embed(). The zero case delegates to that exact
+    /// baseline; both repeated cases change input context, never source audio.
+    func embedForExperiment(source: URL, span: SpeakerSampleSpan, paddingMode: ClipPaddingMode) throws -> [Float]? {
+        if paddingMode == .zero { return try embed(source: source, span: span) }
+        let original = try experimentSamples(source: source, span: span)
+        guard SpeakerClipPolicy.hasUsableSignal(original) else { return nil }
+        let repeated = (0..<sampleCount).map { original[$0 % original.count] }
+        let audio = try audioArray(repeated)
+        let fbank = try models.fbankModel.prediction(from: MLDictionaryFeatureProvider(dictionary: ["audio": MLFeatureValue(multiArray: audio)]))
+        guard let features = fbank.featureValue(for: "fbank_features")?.multiArrayValue,
+              features.shape.map({ $0.intValue }) == [1, 1, 80, 998] else {
+            throw Speakers.failure("Experimental FBank produced an unsupported native shape.")
+        }
+        let weights = try MLMultiArray(shape: [1, NSNumber(value: weightFrames)], dataType: .float32)
+        let active = paddingMode == .repeatFullMask ? weightFrames
+            : max(1, min(weightFrames, Int((Double(min(original.count, sampleCount)) / Double(sampleCount) * Double(weightFrames)).rounded())))
+        for index in 0..<weightFrames { weights[index] = NSNumber(value: index < active ? Float(1) : Float(0)) }
+        let result = try models.embeddingModel.prediction(from: MLDictionaryFeatureProvider(dictionary: [
+            "fbank_features": MLFeatureValue(multiArray: features), "weights": MLFeatureValue(multiArray: weights)
+        ]))
+        guard let output = result.featureValue(for: "embedding")?.multiArrayValue, output.count == 256 else {
+            throw Speakers.failure("Experimental speaker model produced an invalid embedding size.")
+        }
+        return SpeakerClipPolicy.normalizedEmbedding((0..<256).map { output[$0].floatValue })
+    }
+
+    /// Copy of the baseline read geometry, used by batch experiments only.
+    private func experimentSamples(source: URL, span: SpeakerSampleSpan) throws -> [Float] {
+        let file = try AVAudioFile(forReading: source)
+        let rate = file.processingFormat.sampleRate
+        guard rate.isFinite, rate > 0, span.start >= 0, span.end - span.start >= 2, span.end - span.start <= 5.0001 else {
+            throw Speakers.failure("Diagnostics require the same valid 2–5 second baseline clip.")
+        }
+        let first = min(file.length, AVAudioFramePosition((span.start * rate).rounded(.down)))
+        let last = min(file.length, AVAudioFramePosition((span.end * rate).rounded(.up)))
+        guard last > first else { throw Speakers.failure("The diagnostic clip has no readable audio frames.") }
+        file.framePosition = first
+        let frames = AVAudioFrameCount(last - first)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else {
+            throw Speakers.failure("Could not allocate a short diagnostic buffer.")
+        }
+        try file.read(into: buffer, frameCount: frames)
+        return try converter.resampleBuffer(buffer)
     }
 
     private func audioArray(_ samples: [Float]) throws -> MLMultiArray {

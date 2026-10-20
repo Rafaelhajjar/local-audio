@@ -1,6 +1,6 @@
 # Validation evidence
 
-LocalAudio development previews, checked on 2026-10-17. The 0.1 evidence below is retained; the 0.2 voice-feature checks are recorded separately. These checks establish the observed behavior below; they do not establish universal microphone compatibility, transcription accuracy or public Gatekeeper installation.
+LocalAudio development previews, checked through 2026-10-20. Earlier preview evidence is retained; the 0.2.1 integration and release review are recorded separately below. These checks establish the observed behavior below; they do not establish universal microphone compatibility, transcription accuracy or public Gatekeeper installation.
 
 ## Build and source
 
@@ -89,3 +89,26 @@ Voice-specific tests also cover atomic local persistence, corrupt/future-version
 The final 0.2 suite passed **88 tests**, zero failures, both normally and with networking denied. The final packaged app passed strict ad hoc signature checks, profile persistence on relaunch, explicit possible-match confirmation, atomic new-person naming and native reanalysis. The final packaged speaker helper also completed the different-voice control with network and developer build-cache reads denied. Both worker scratch folders were empty after exit; original generated audio hashes remained unchanged. All 725 protected earlier-project source files still matched their baseline, and all 653 frozen dependency hashes matched.
 
 Final tested 0.2 ZIP SHA-256: `89ec74c08310578000275af18c4ad13c6e2e1c5f3f1af350a374767bec15416c`. Model weights and test audio are absent from this ZIP and from source. This remains an ad hoc, unnotarized development preview; clean-Mac/Gatekeeper and real-person matching accuracy are unverified.
+
+## Integrated recognition pipeline (0.2.1 preview)
+
+Checked on 2026-10-18. The current source and local package integrate repeated short-clip input with original-duration pooling, speech-weighted center/start/end excerpts and source-balanced profile prototypes. Extraction recipes remain separate from model identity. The earlier public 0.2.0 release predates this integration.
+
+All **112 Swift tests passed**, including fourteen helper test methods and generated-fixture tests for legacy decoding, recipe isolation, source balancing, copied-window deduplication, preserved human confirmation IDs/dates, unavailable-example recovery, label-only turns, stale refresh rejection, bank-first publication failure and retry, and confirmed-only exports. All 653 frozen vendor file hashes matched. These pure tests require no model downloads or microphone input.
+
+The packaged helper re-extracted 138 previously named turns across twelve source files with network access and writes to the original archive/label/model folders denied. All 113 usable vectors reproduced the selected experiment within a maximum absolute component difference of 1.4e-8. On the same 65 usable cross-day examples and common reference cohort, first-choice agreement was **58/65**, reproducing the development experiment versus the earlier extractor/scorer's 24/65. The full pipeline recovered one additional usable known query: 59/66. All 138 turns remained in full-system denominators. Only two people have cross-day examples; labels were mostly owner-reviewed but individual purity is uncertain, and there is no untouched final set. These are development ranking agreements, not general recognition accuracy.
+
+Current 0.60 similarity and 0.15 margin review gates produced eleven suggested matches agreeing with saved labels and zero observed disagreements on this same development corpus, with 127 abstentions. The gates are development heuristics, not independently validated precision guarantees. Every displayed name and enrolled example still requires explicit human confirmation.
+
+The exact local ZIP was extracted, all three binaries matched the packaged app and its signature verified. With network access denied, the generated-speech UI fixture updated two legacy profiles without changing their names, confirmation records, enrollment IDs/dates, example counts or original audio. Each updated example recorded three contributing windows. Offline transcription then triggered automatic voice refresh without changing the reviewed turn IDs/bounds, confirmations or profile bank. Keep Unknown revoked one generated turn's name; the UI separately offered Possible match while the turn remained Unknown, and explicit Confirm applied the name. An imported different generated voice remained Unknown with no suggestion. These are limited synthetic controls. No installed app or original user library was modified. All fourteen protected original audio/label files retained their hashes. The local package remains ad hoc signed and unnotarized.
+
+Local 0.2.1 ZIP SHA-256: `419b0f662039ac29bf6497511c1e273ab5570b52b05993c7cf66de660197ed19`. No private evaluation data, models, audio, app state or logs are included in source or the ZIP.
+
+
+## 0.2.1 release review (2026-10-20)
+
+The integrated changes were reviewed before publication. All **112 tests passed again with networking denied**, and the source check passed all 716 source files with all 653 frozen dependency hashes unchanged. The tests use generated fixtures and do not open a microphone or download models.
+
+A fresh Apple silicon release build completed and passed strict ad hoc signature verification. Every file in the rebuilt application matched the extracted October 18 tested application, including all three binaries, resources, manifests and signatures. The release retains that exact previously tested ZIP and its checksum (`419b0f662039ac29bf6497511c1e273ab5570b52b05993c7cf66de660197ed19`); archive timestamps can change a newly generated ZIP without changing its app contents. The ZIP contains no recordings, transcripts, voice profiles, model weights, private evaluation data or logs.
+
+This review does not add new hardware, real-world accuracy, clean-Mac installation or notarization evidence. The release remains an Apple silicon/macOS 15+ development preview with experimental, human-confirmed voice matching.

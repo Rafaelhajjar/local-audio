@@ -16,6 +16,18 @@ final class VoiceController: ObservableObject {
     var canAnalyze: () -> Bool = { true }
     var onWorkFinished: (() -> Void)?
     var isBusy: Bool { isAnalyzing || isEditing || models.isBusy }
+    var outdatedExampleCount: Int {
+        profiles.flatMap(\.examples).filter { $0.recipeID == VoiceEmbeddingRecipe.legacy || !$0.isAvailableForMatching }.count
+    }
+    var needsMatchingUpdate: Bool {
+        guard let analysis else { return false }
+        return analysis.recipeID == VoiceEmbeddingRecipe.legacy || profiles.flatMap(\.examples).contains {
+            $0.recordingID == analysis.recordingID && !$0.isAvailableForMatching
+        }
+    }
+    var preservesReviewedTurns: Bool {
+        needsMatchingUpdate || analysis?.turns.contains(where: { $0.confirmedPersonID != nil }) == true
+    }
 
     private let library: VoiceLibrary
     private let scratch: URL
@@ -85,6 +97,14 @@ final class VoiceController: ObservableObject {
         let directory = scratch.appendingPathComponent(operation.uuidString)
         defer { try? FileManager.default.removeItem(at: directory); runner = nil }
         do {
+            if let existing = try await library.loadAnalysis(for: item),
+               existing.recipeID == VoiceEmbeddingRecipe.legacy || existing.turns.contains(where: { $0.confirmedPersonID != nil }) {
+                try await refreshEmbeddings(item, models: folder)
+                await reloadProfiles()
+                if selected?.id == item.id && selected?.url == item.url { await select(item) }
+                status = "Voice matching updated. Your confirmed names and reviewed turns are preserved."
+                return
+            }
             let request = try await library.analysisRequest(for: item, modelID: ModelPack.speakers.modelID)
             try Task.checkCancellation()
             let requestURL = directory.appendingPathComponent("request.json")
@@ -104,6 +124,79 @@ final class VoiceController: ObservableObject {
             self.error = error.localizedDescription
             status = "Voice analysis needs attention. Your earlier data is safe."
         }
+    }
+
+    /// Re-extract reviewed turns without running diarization again. Exact turn
+    /// identities and human confirmations are preserved by the library actor.
+    func updateVoiceMatching(_ item: AudioRecording) async {
+        await updateVoiceMatching(in: [item], savedProfilesOnly: false)
+    }
+
+    func updateSavedVoices(in recordings: [AudioRecording]) async {
+        await updateVoiceMatching(in: recordings, savedProfilesOnly: true)
+    }
+
+    private func updateVoiceMatching(in recordings: [AudioRecording], savedProfilesOnly: Bool) async {
+        guard !shuttingDown, !isAnalyzing, !isEditing, !models.isBusy, canAnalyze() else { return }
+        guard models.isReady, let folder = models.modelDirectory else {
+            error = "Set up the speaker model in Settings before updating saved voices. Your names are safe."
+            return
+        }
+        let oldExamples = profiles.flatMap(\.examples).filter { $0.recipeID == VoiceEmbeddingRecipe.legacy || !$0.isAvailableForMatching }
+        let neededIDs = Set(oldExamples.map(\.recordingID))
+        let items = savedProfilesOnly ? recordings.filter { neededIDs.contains($0.id) } : recordings
+        let missing = savedProfilesOnly ? neededIDs.subtracting(Set(items.map(\.id))).count : 0
+        let id = UUID(); operationID = id; isAnalyzing = true; error = nil
+        let task = Task { [weak self] in
+            guard let self else { return }
+            var completed = 0, unavailable = missing
+            do {
+                for item in items {
+                    try Task.checkCancellation()
+                    self.status = "Updating saved voices (\(completed + unavailable + 1)/\(items.count + missing))…"
+                    do {
+                        try await self.refreshEmbeddings(item, models: folder)
+                        completed += 1
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        unavailable += 1
+                        self.error = error.localizedDescription
+                    }
+                }
+                await self.reloadProfiles()
+                if let selected = self.selected, items.contains(where: { $0.id == selected.id && $0.url == selected.url }) { await self.select(selected) }
+                self.status = unavailable == 0
+                    ? "Voice matching updated. Your confirmed names are preserved."
+                    : "Updated \(completed) recording(s); \(unavailable) unavailable. Reconnect missing originals or retry. Your names are preserved."
+                if self.outdatedExampleCount > 0, unavailable == 0 {
+                    self.status += " Some examples could not be refreshed; they remain saved and are excluded from new matching."
+                }
+            } catch is CancellationError {
+                await self.reloadProfiles()
+                if let selected = self.selected, items.contains(where: { $0.id == selected.id && $0.url == selected.url }) { await self.select(selected) }
+                self.status = "Voice update stopped. Completed updates and your confirmed names are safe."
+            } catch { self.error = error.localizedDescription }
+        }
+        workTask = task
+        await task.value
+        if operationID == id { operationID = nil; workTask = nil; isAnalyzing = false; onWorkFinished?() }
+    }
+
+    private func refreshEmbeddings(_ item: AudioRecording, models folder: URL) async throws {
+        guard let prior = try await library.loadAnalysis(for: item) else {
+            throw LocalAudioError.message("Saved voice analysis is unavailable for “\(item.title)”. Restore its voice sidecar and retry; confirmed names are preserved.")
+        }
+        let directory = scratch.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory); runner = nil }
+        let requestURL = directory.appendingPathComponent("refresh.json")
+        let resultURL = directory.appendingPathComponent("result.json")
+        try PrivateJSON.write(VoiceEmbeddingRefreshRequest(analysis: prior, audioURL: item.url), to: requestURL)
+        try Task.checkCancellation()
+        let worker = WorkerProcess(); runner = worker
+        try await worker.run(executable: WorkerProcess.speakerHelperURL(), arguments: ["--refresh-embeddings", requestURL.path, "--models", folder.path, "--output", resultURL.path], logs: scratch)
+        try Task.checkCancellation()
+        let refreshed = try PrivateJSON.read(VoiceAnalysis.self, from: resultURL)
+        _ = try await library.refreshEmbeddings(from: prior, with: refreshed, for: item)
     }
 
     func cancel() { workTask?.cancel(); runner?.cancel() }

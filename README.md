@@ -4,7 +4,7 @@ A small native Mac app for recording, listening, transcribing and remembering vo
 
 Choose a microphone, press Record, and stop when you are finished. Or import an existing audio file. Install the optional English model in Settings once, then transcribe without an internet connection. No account, server, telemetry or audio upload.
 
-**Development preview.** Apple silicon, macOS 15 or newer. [Preview ZIP and checksum](https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.2.0-preview.1). The app is ad hoc signed and unnotarized; Gatekeeper and clean-Mac installation are unverified, so macOS may block the downloaded build. Build-from-source instructions are below. See [validation evidence](docs/VALIDATION.md) and [the release checklist](docs/CHECKLIST.md) for tested behavior and remaining work.
+**Development preview.** Apple silicon, macOS 15 or newer. [Preview ZIP and checksum](https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.2.1-preview.1). The app is ad hoc signed and unnotarized; Gatekeeper and clean-Mac installation are unverified, so macOS may block the downloaded build. Build-from-source instructions are below. See [validation evidence](docs/VALIDATION.md) and [the release checklist](docs/CHECKLIST.md) for tested behavior and remaining work.
 
 ## What it does
 
@@ -19,6 +19,8 @@ Choose a microphone, press Record, and stop when you are finished. Or import an 
 English transcription is automatic speech recognition, not a guaranteed verbatim record. Voice matching is experimental and requires confirmation for every name. Short, overlapping or ambiguous speech may remain Unknown. Recording works without either model; conversation summaries are outside this version.
 
 To name a new voice: **Settings → Speaker model → Download**, then **Library → recording → Voices → Find Voices**. Listen to a turn and choose **Name This Voice**. Use **People** to rename or forget saved profiles. See [voice profiles and limitations](docs/VOICES.md).
+
+The 0.2.1 preview integrates speech-weighted excerpts and balanced profile matching. For older saved examples, choose **People → Update Saved Voices** with the originals available in Library. Confirmed names are preserved; all processing uses the existing local speaker model. Confirmed names and reviewed turn boundaries are preserved during the update.
 
 ## Build and run
 

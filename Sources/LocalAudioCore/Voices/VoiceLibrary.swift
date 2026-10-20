@@ -40,7 +40,7 @@ public actor VoiceLibrary {
     public func analysisRequest(for recording: AudioRecording, modelID: String) throws -> VoiceAnalysisRequest {
         guard !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw failure("Choose a speaker model first.") }
         return VoiceAnalysisRequest(recordingID: recording.id, audioURL: recording.url,
-                                    audioHash: try stableHash(recording.url), modelID: modelID)
+                                    audioHash: try stableHash(recording.url), modelID: modelID, recipeID: VoiceEmbeddingRecipe.current)
     }
 
     public func loadAnalysis(for recording: AudioRecording) throws -> VoiceAnalysis? {
@@ -60,6 +60,52 @@ public actor VoiceLibrary {
         try requireSource(anonymous, recording: recording)
         try atomicWrite(anonymous, to: destination)
         return overlay(anonymous, state: state)
+    }
+
+    /// Re-extract already enrolled examples without adding a person, label or
+    /// enrollment. The identity store commits atomically first. If sidecar
+    /// publication fails, old labels still load and recipe checks suppress
+    /// incompatible matching; the same prior snapshot can safely be retried.
+    @discardableResult
+    public func refreshEmbeddings(from prior: VoiceAnalysis, with refreshed: VoiceAnalysis,
+                                  for recording: AudioRecording) throws -> VoiceAnalysis {
+        let expected = try validated(prior, duration: recording.duration)
+        let replacement = try validated(refreshed, duration: recording.duration)
+        guard replacement.recipeID == VoiceEmbeddingRecipe.current, replacement.version == 2,
+              replacement.recordingID == expected.recordingID, replacement.audioHash == expected.audioHash,
+              replacement.modelID == expected.modelID, replacement.turns.count == expected.turns.count,
+              zip(replacement.turns, expected.turns).allSatisfy({ new, old in
+                  new.id == old.id && new.start == old.start && new.end == old.end && new.speakerID == old.speakerID
+              }) else { throw failure("The refreshed voice analysis changed the reviewed source or turn boundaries. Your names and examples have not been changed.") }
+        let result = try transaction { state in
+            guard let current = try currentAnalysis(for: recording), current == expected else {
+                throw failure("This voice analysis changed during refresh. Reopen it and refresh again; your names have been preserved.")
+            }
+            try requireSource(replacement, recording: recording)
+            for confirmation in state.confirmations {
+                guard confirmation.recordingID == replacement.recordingID, confirmation.audioHash == replacement.audioHash,
+                      confirmation.modelID == replacement.modelID, let id = confirmation.exampleID,
+                      let turn = replacement.turns.first(where: { $0.id == confirmation.turnID && $0.start == confirmation.start && $0.end == confirmation.end }),
+                      let person = state.profiles.firstIndex(where: { $0.id == confirmation.personID }),
+                      let index = state.profiles[person].examples.firstIndex(where: { $0.id == id }) else { continue }
+                let old = state.profiles[person].examples[index]
+                if let sample = enrollmentSample(turn: turn, recipeID: replacement.recipeID) {
+                    state.profiles[person].examples[index] = VoiceExample(id: old.id, recordingID: old.recordingID,
+                        audioHash: old.audioHash, turnID: old.turnID, modelID: old.modelID, start: sample.start, end: sample.end,
+                        embedding: sample.embedding, confirmedAt: old.confirmedAt, recipeID: replacement.recipeID,
+                        embeddingSpans: turn.embeddingSpans)
+                } else {
+                    state.profiles[person].examples[index] = VoiceExample(id: old.id, recordingID: old.recordingID,
+                        audioHash: old.audioHash, turnID: old.turnID, modelID: old.modelID, start: old.start, end: old.end,
+                        embedding: old.embedding, confirmedAt: old.confirmedAt, recipeID: old.recipeID,
+                        embeddingSpans: old.embeddingSpans, isAvailableForMatching: false)
+                }
+            }
+            return overlay(replacement, state: state)
+        }
+        try requireSource(replacement, recording: recording)
+        try atomicWrite(replacement, to: Self.analysisURL(for: recording.url))
+        return result
     }
 
     @discardableResult
@@ -106,11 +152,12 @@ public actor VoiceLibrary {
         if let expected {
             guard expected.version == analysis.version, expected.recordingID == analysis.recordingID,
                   expected.audioHash == analysis.audioHash, expected.modelID == analysis.modelID,
+                  expected.recipeID == analysis.recipeID,
                   expected.createdAt == analysis.createdAt,
                   let old = expected.turns.first(where: { $0.id == turnID }),
                   old.start == turn.start, old.end == turn.end, old.speakerID == turn.speakerID,
                   old.sampleStart == turn.sampleStart, old.sampleEnd == turn.sampleEnd,
-                  old.embedding == turn.embedding else {
+                  old.embedding == turn.embedding, old.embeddingSpans == turn.embeddingSpans else {
                 throw failure("This voice analysis changed while you were naming it. Listen to the current turn and confirm again.")
             }
         }
@@ -122,12 +169,11 @@ public actor VoiceLibrary {
         revoke(turnID: turn.id, recordingID: analysis.recordingID, state: &state)
         let now = Date()
         var exampleID: String?
-        if let start = turn.sampleStart, let end = turn.sampleEnd,
-           end - start >= 2, end - start <= 5.000_001,
-           let embedding = VoiceMatcher.normalized(turn.embedding) {
+        if let sample = enrollmentSample(turn: turn, recipeID: analysis.recipeID) {
             let example = VoiceExample(recordingID: analysis.recordingID, audioHash: analysis.audioHash,
-                                       turnID: turn.id, modelID: analysis.modelID, start: start, end: end,
-                                       embedding: embedding, confirmedAt: now)
+                                       turnID: turn.id, modelID: analysis.modelID, start: sample.start, end: sample.end,
+                                       embedding: sample.embedding, confirmedAt: now, recipeID: analysis.recipeID,
+                                       embeddingSpans: turn.embeddingSpans)
             state.profiles[person].examples.append(example)
             exampleID = example.id
         }
@@ -137,7 +183,7 @@ public actor VoiceLibrary {
     }
 
     private struct State: Codable {
-        var version = 1
+        var version = 2
         var profiles: [VoiceProfile] = []
         var confirmations: [Confirmation] = []
     }
@@ -158,7 +204,7 @@ public actor VoiceLibrary {
         guard FileManager.default.fileExists(atPath: storeURL.path) else { return State() }
         do {
             let data = try Data(contentsOf: storeURL)
-            guard try JSONDecoder().decode(Version.self, from: data).version == 1 else {
+            guard [1, 2].contains(try JSONDecoder().decode(Version.self, from: data).version) else {
                 throw failure("The voice library needs a newer app. Its data has been preserved.")
             }
             let state = try JSONDecoder().decode(State.self, from: data)
@@ -180,6 +226,7 @@ public actor VoiceLibrary {
         defer { _ = flock(descriptor, LOCK_UN) }
         var state = try readState()
         let result = try change(&state)
+        state.version = 2
         try validateState(state)
         try atomicWrite(state, to: storeURL)
         return result
@@ -215,7 +262,7 @@ public actor VoiceLibrary {
     private func decodeAnalysis(at url: URL) throws -> VoiceAnalysis {
         do {
             let data = try Data(contentsOf: url)
-            guard try JSONDecoder().decode(Version.self, from: data).version == 1 else {
+            guard [1, 2].contains(try JSONDecoder().decode(Version.self, from: data).version) else {
                 throw failure("This voice analysis needs a newer app. Its data has been preserved.")
             }
             return try validated(JSONDecoder().decode(VoiceAnalysis.self, from: data), duration: nil)
@@ -223,7 +270,9 @@ public actor VoiceLibrary {
     }
 
     private func validated(_ input: VoiceAnalysis, duration: Double?) throws -> VoiceAnalysis {
-        guard input.version == 1, !input.recordingID.isEmpty, validHash(input.audioHash),
+        guard [1, 2].contains(input.version), VoiceEmbeddingRecipe.isSupported(input.recipeID),
+              (input.version != 1 || input.recipeID == VoiceEmbeddingRecipe.legacy),
+              !input.recordingID.isEmpty, validHash(input.audioHash),
               !input.modelID.isEmpty, input.createdAt.timeIntervalSinceReferenceDate.isFinite else {
             throw failure("Invalid or unsupported voice analysis. Analyze this audio again.")
         }
@@ -242,6 +291,20 @@ public actor VoiceLibrary {
                     throw failure("A voice example falls outside its speaker turn.")
                 }
             default: throw failure("A voice example has incomplete timing.")
+            }
+            if let spans = turn.embeddingSpans {
+                guard let start = turn.sampleStart, let end = turn.sampleEnd,
+                      VoiceMatcher.validSpans(spans, previewStart: start, previewEnd: end,
+                          within: VoiceSampleSpan(start: turn.start, end: turn.end)) else {
+                    throw failure("A voice embedding has invalid contributing sample ranges.")
+                }
+            }
+            if input.recipeID == VoiceEmbeddingRecipe.current, VoiceMatcher.normalized(turn.embedding) != nil {
+                guard let start = turn.sampleStart, let end = turn.sampleEnd,
+                      VoiceMatcher.validSpans(turn.embeddingSpans, previewStart: start, previewEnd: end,
+                          within: VoiceSampleSpan(start: turn.start, end: turn.end)) else {
+                    throw failure("The refreshed voice vector is missing its contributing sample ranges.")
+                }
             }
             result.turns[index].confirmedPersonID = nil
         }
@@ -275,6 +338,7 @@ public actor VoiceLibrary {
             for example in profile.examples {
                 guard !example.id.isEmpty, examples.insert(example.id).inserted, !example.recordingID.isEmpty,
                       validHash(example.audioHash), !example.turnID.isEmpty, !example.modelID.isEmpty,
+                      VoiceEmbeddingRecipe.isSupported(example.recipeID), (state.version != 1 || example.recipeID == VoiceEmbeddingRecipe.legacy),
                       validRange(example.start, example.end), example.end - example.start >= 2,
                       example.end - example.start <= 5.000_001, example.confirmedAt.timeIntervalSinceReferenceDate.isFinite,
                       let normalized = VoiceMatcher.normalized(example.embedding),
@@ -296,9 +360,25 @@ public actor VoiceLibrary {
                       example.turnID == confirmation.turnID, example.modelID == confirmation.modelID,
                       example.start >= confirmation.start, example.end <= confirmation.end,
                       example.confirmedAt == confirmation.confirmedAt else { throw failure("A voice example has no matching human confirmation.") }
+                if example.recipeID == VoiceEmbeddingRecipe.current || example.embeddingSpans != nil {
+                    guard VoiceMatcher.validSpans(example.embeddingSpans, previewStart: example.start, previewEnd: example.end,
+                        within: VoiceSampleSpan(start: confirmation.start, end: confirmation.end)) else {
+                        throw failure("A confirmed vector has invalid contributing sample provenance.")
+                    }
+                }
             }
         }
         guard byExample.isEmpty else { throw failure("A voice example has no human confirmation.") }
+    }
+
+    private func enrollmentSample(turn: VoiceTurn, recipeID: String) -> (start: Double, end: Double, embedding: [Float])? {
+        guard let start = turn.sampleStart, let end = turn.sampleEnd,
+              end - start >= 2, end - start <= 5.000_001,
+              let embedding = VoiceMatcher.normalized(turn.embedding) else { return nil }
+        if recipeID == VoiceEmbeddingRecipe.current,
+           !VoiceMatcher.validSpans(turn.embeddingSpans, previewStart: start, previewEnd: end,
+                                    within: VoiceSampleSpan(start: turn.start, end: turn.end)) { return nil }
+        return (start, end, embedding)
     }
 
     private func atomicWrite<T: Encodable>(_ value: T, to destination: URL) throws {

@@ -37,7 +37,7 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 245)
         } detail: {
             if section == "record" { RecordView(store: store, openLibrary: { section = "library" }) }
-            else if section == "people" { PeopleView(voices: store.voices) }
+            else if section == "people" { PeopleView(store: store) }
             else { LibraryView(store: store, record: { section = "record" }) }
         }
         .disabled(store.isShuttingDown)

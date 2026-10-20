@@ -202,7 +202,7 @@ final class VoiceLibraryTests: XCTestCase {
         let root = try temporary(), folder = root.appendingPathComponent("Private")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("voice-library.json")
-        for bytes in [Data("broken-json".utf8), Data("{\"version\":2,\"newData\":\"preserve\"}".utf8)] {
+        for bytes in [Data("broken-json".utf8), Data("{\"version\":3,\"newData\":\"preserve\"}".utf8)] {
             try bytes.write(to: url)
             let library = VoiceLibrary(folder: folder)
             await expectFailure { _ = try await library.profiles() }
@@ -218,7 +218,7 @@ final class VoiceLibraryTests: XCTestCase {
         let library = VoiceLibrary(folder: root.appendingPathComponent("Private"))
         let valid = try analysis(item)
         let sidecar = VoiceLibrary.analysisURL(for: item.url)
-        for bytes in [Data("broken-json".utf8), Data("{\"version\":2,\"newData\":\"preserve\"}".utf8)] {
+        for bytes in [Data("broken-json".utf8), Data("{\"version\":3,\"newData\":\"preserve\"}".utf8)] {
             try bytes.write(to: sidecar)
             await expectFailure { _ = try await library.loadAnalysis(for: item) }
             await expectFailure { _ = try await library.saveAnalysis(valid, for: item) }
@@ -369,5 +369,231 @@ final class VoiceLibraryTests: XCTestCase {
         let people = try await library.profiles()
         XCTAssertTrue(people.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("voice-library.json").path))
+    }
+
+    private func currentAnalysis(_ prior: VoiceAnalysis) -> VoiceAnalysis {
+        var updated = prior
+        updated.version = 2; updated.recipeID = VoiceEmbeddingRecipe.current
+        updated.createdAt = prior.createdAt.addingTimeInterval(1)
+        for index in updated.turns.indices where updated.turns[index].embedding != nil {
+            if let start = updated.turns[index].sampleStart, let end = updated.turns[index].sampleEnd {
+                updated.turns[index].embeddingSpans = [VoiceSampleSpan(start: start, end: end)]
+            }
+        }
+        return updated
+    }
+
+    private func currentExample(hash: String, recordingID: String = UUID().uuidString,
+                                start: Double = 0, embedding: [Float], available: Bool = true) -> VoiceExample {
+        VoiceExample(recordingID: recordingID, audioHash: hash, turnID: UUID().uuidString, modelID: model,
+            start: start, end: start + 2, embedding: embedding, recipeID: VoiceEmbeddingRecipe.current,
+            embeddingSpans: [.init(start: start, end: start + 2)], isAvailableForMatching: available)
+    }
+
+    func testLegacyDecodeAndAtomicVersionTwoMigrationPreserveHumanHistory() async throws {
+        let root = try temporary(), item = try await recording(root)
+        let folder = root.appendingPathComponent("Private"), library = VoiceLibrary(folder: folder)
+        let raw = try analysis(item)
+        try await library.saveAnalysis(raw, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        let store = folder.appendingPathComponent("voice-library.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store)) as? [String: Any])
+        object["version"] = 1
+        var people = try XCTUnwrap(object["profiles"] as? [[String: Any]])
+        var examples = try XCTUnwrap(people[0]["examples"] as? [[String: Any]])
+        for key in ["recipeID", "embeddingSpans", "isAvailableForMatching"] { examples[0].removeValue(forKey: key) }
+        people[0]["examples"] = examples; object["profiles"] = people
+        let legacyBytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        try legacyBytes.write(to: store)
+        var sidecar = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(raw)) as? [String: Any])
+        sidecar.removeValue(forKey: "recipeID")
+        try JSONSerialization.data(withJSONObject: sidecar).write(to: VoiceLibrary.analysisURL(for: item.url))
+        let restarted = VoiceLibrary(folder: folder)
+        let decoded = try await restarted.profiles()
+        let old = try XCTUnwrap(decoded[0].examples.first)
+        XCTAssertEqual(old.recipeID, VoiceEmbeddingRecipe.legacy)
+        XCTAssertTrue(old.isAvailableForMatching)
+        let loaded = try await restarted.loadAnalysis(for: item)
+        XCTAssertEqual(loaded?.recipeID, VoiceEmbeddingRecipe.legacy)
+        XCTAssertEqual(loaded?.turns[0].confirmedPersonID, person.id)
+        XCTAssertEqual(try Data(contentsOf: store), legacyBytes, "Reading must not rewrite legacy state.")
+        try await restarted.renamePerson(id: person.id, name: "Updated")
+        let migrated = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store)) as? [String: Any])
+        XCTAssertEqual(migrated["version"] as? Int, 2)
+        let after = try await restarted.profiles()
+        XCTAssertEqual(after[0].examples[0], old)
+        XCTAssertEqual(after[0].createdAt, decoded[0].createdAt)
+        let request = try await restarted.analysisRequest(for: item, modelID: model)
+        XCTAssertEqual(request.recipeID, VoiceEmbeddingRecipe.current)
+        XCTAssertEqual(currentAnalysis(raw).version, 2)
+    }
+
+    func testCurrentCentroidBalancesFilesAndUsesSeparateExperimentalReviewGates() {
+        let hashB = String(repeating: "b", count: 64), hashC = String(repeating: "c", count: 64)
+        let turn = VoiceTurn(id: "q", start: 0, end: 4, speakerID: "s", embedding: vector(), sampleStart: 0, sampleEnd: 2,
+                             embeddingSpans: [.init(start: 0, end: 2)])
+        let current = VoiceAnalysis(recordingID: "query", audioHash: String(repeating: "a", count: 64), modelID: model,
+                                    turns: [turn], recipeID: VoiceEmbeddingRecipe.current)
+        var examples = (0..<10).map { currentExample(hash: hashB, start: Double($0 * 2), embedding: vector()) }
+        examples.append(currentExample(hash: hashC, embedding: vector(0, 1)))
+        let person = VoiceProfile(name: "Alex", examples: examples)
+        let result = VoiceMatcher.suggestion(for: turn, in: current, profiles: [person])
+        XCTAssertEqual(result?.similarity ?? 0, 1 / sqrt(2), accuracy: 0.000001)
+        XCTAssertEqual(result?.exampleCount, 2)
+        XCTAssertNil(turn.confirmedPersonID)
+        let close = VoiceProfile(name: "Close", examples: [currentExample(hash: String(repeating: "d", count: 64), embedding: vector(0.69, sqrt(1 - 0.69 * 0.69)))])
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: current, profiles: [person, close]))
+        var legacy = current; legacy.version = 1; legacy.recipeID = VoiceEmbeddingRecipe.legacy
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: legacy, profiles: [person]), "Recipe mismatch must never compare vectors.")
+        let unavailable = VoiceProfile(name: "Unavailable", examples: [currentExample(hash: hashB, embedding: vector(), available: false)])
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: current, profiles: [unavailable]))
+        let old = VoiceProfile(name: "Old", examples: [.init(recordingID: "old", audioHash: hashB, turnID: "e", modelID: model,
+                                                          start: 0, end: 2, embedding: vector())])
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: current, profiles: [old]))
+        let sameAudio = VoiceProfile(name: "Copy", examples: [currentExample(hash: current.audioHash, embedding: vector())])
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: current, profiles: [sameAudio]))
+    }
+
+    func testCurrentCentroidDeduplicatesCopiedWindowsAndAbstainsForCancellation() {
+        let hash = String(repeating: "b", count: 64)
+        let first = currentExample(hash: hash, embedding: vector())
+        let duplicate = currentExample(hash: hash, embedding: vector())
+        let second = currentExample(hash: hash, start: 2, embedding: vector(0, 1))
+        let direction = Float(1 / sqrt(2.0))
+        let turn = VoiceTurn(id: "q", start: 0, end: 3, speakerID: "s", embedding: vector(direction, direction), sampleStart: 0, sampleEnd: 2,
+                             embeddingSpans: [.init(start: 0, end: 2)])
+        let raw = VoiceAnalysis(recordingID: "query", audioHash: String(repeating: "a", count: 64), modelID: model, turns: [turn], recipeID: VoiceEmbeddingRecipe.current)
+        let person = VoiceProfile(name: "Alex", examples: [first, duplicate, second])
+        XCTAssertEqual(VoiceMatcher.suggestion(for: turn, in: raw, profiles: [person])?.similarity ?? 0, 1, accuracy: 0.000001)
+        let opposing = VoiceProfile(name: "Opposing", examples: [first, currentExample(hash: hash, start: 2, embedding: vector(-1))])
+        XCTAssertNil(VoiceMatcher.suggestion(for: turn, in: raw, profiles: [opposing]))
+        var malformed = turn; malformed.embeddingSpans = nil
+        XCTAssertNil(VoiceMatcher.suggestion(for: malformed, in: raw, profiles: [person]))
+    }
+
+    func testRefreshPreservesConfirmedIdentitiesAndNeverEnrollsLabelOnlyTurns() async throws {
+        let root = try temporary(), item = try await recording(root)
+        let library = VoiceLibrary(folder: root.appendingPathComponent("Private"))
+        var prior = try analysis(item)
+        prior.turns.append(VoiceTurn(id: "label-only", start: 4, end: 6, speakerID: "s1"))
+        try await library.saveAnalysis(prior, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        let reviewed = try await library.confirm(turnID: "label-only", in: item, personID: person.id)
+        let before = try await library.profiles()
+        var refreshed = currentAnalysis(prior)
+        refreshed.turns[0].embedding = vector(0, 1)
+        refreshed.turns[0].embeddingSpans = [.init(start: 0.5, end: 3.5), .init(start: 1, end: 4)]
+        refreshed.turns[1].embedding = vector(); refreshed.turns[1].sampleStart = 4; refreshed.turns[1].sampleEnd = 6
+        refreshed.turns[1].embeddingSpans = [.init(start: 4, end: 6)]
+        refreshed.turns[0].confirmedPersonID = UUID().uuidString // helper cannot assign identities
+        let result = try await library.refreshEmbeddings(from: reviewed, with: refreshed, for: item)
+        XCTAssertTrue(result.turns.allSatisfy { $0.confirmedPersonID == person.id })
+        let after = try await library.profiles()
+        XCTAssertEqual(after.count, 1)
+        XCTAssertEqual(after[0].examples.count, 1)
+        XCTAssertEqual(after[0].examples[0].id, before[0].examples[0].id)
+        XCTAssertEqual(after[0].examples[0].confirmedAt, before[0].examples[0].confirmedAt)
+        XCTAssertEqual(after[0].examples[0].recipeID, VoiceEmbeddingRecipe.current)
+        XCTAssertEqual(after[0].examples[0].embedding, vector(0, 1))
+        XCTAssertEqual(after[0].examples[0].embeddingSpans, refreshed.turns[0].embeddingSpans)
+        XCTAssertEqual(after[0].createdAt, before[0].createdAt)
+        let loaded = try await library.loadAnalysis(for: item)
+        XCTAssertEqual(loaded?.recipeID, VoiceEmbeddingRecipe.current)
+        XCTAssertEqual(loaded?.version, 2)
+        XCTAssertTrue(loaded!.turns.allSatisfy { $0.confirmedPersonID == person.id })
+        let raw = try JSONDecoder().decode(VoiceAnalysis.self, from: Data(contentsOf: VoiceLibrary.analysisURL(for: item.url)))
+        XCTAssertTrue(raw.turns.allSatisfy { $0.confirmedPersonID == nil })
+    }
+
+    func testUnusableRefreshDeactivatesAndRetryRecoversExistingEnrollment() async throws {
+        let root = try temporary(), item = try await recording(root)
+        let library = VoiceLibrary(folder: root.appendingPathComponent("Private"))
+        let prior = try analysis(item)
+        try await library.saveAnalysis(prior, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        let reviewed = try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        let old = try await library.profiles()[0].examples[0]
+        var unusable = currentAnalysis(prior)
+        unusable.turns[0].embedding = nil; unusable.turns[0].embeddingSpans = nil
+        unusable.turns[0].sampleStart = nil; unusable.turns[0].sampleEnd = nil
+        let published = try await library.refreshEmbeddings(from: reviewed, with: unusable, for: item)
+        let inactive = try await library.profiles()[0].examples[0]
+        XCTAssertFalse(inactive.isAvailableForMatching)
+        XCTAssertEqual(inactive.id, old.id)
+        XCTAssertEqual(published.turns[0].confirmedPersonID, person.id)
+        var valid = currentAnalysis(prior); valid.createdAt = unusable.createdAt.addingTimeInterval(1)
+        try await library.refreshEmbeddings(from: published, with: valid, for: item)
+        let recovered = try await library.profiles()[0].examples[0]
+        XCTAssertTrue(recovered.isAvailableForMatching)
+        XCTAssertEqual(recovered.id, old.id)
+        XCTAssertEqual(recovered.confirmedAt, old.confirmedAt)
+        XCTAssertEqual(recovered.recipeID, VoiceEmbeddingRecipe.current)
+    }
+
+    func testRefreshRejectsStaleSnapshotChangedGeometryAndSourceWithoutMutation() async throws {
+        let root = try temporary(), item = try await recording(root)
+        let folder = root.appendingPathComponent("Private"), library = VoiceLibrary(folder: folder)
+        let prior = try analysis(item)
+        try await library.saveAnalysis(prior, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        let reviewed = try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        let store = folder.appendingPathComponent("voice-library.json"), stored = try Data(contentsOf: folder.appendingPathComponent("voice-library.json"))
+        let sidecar = VoiceLibrary.analysisURL(for: item.url), original = try Data(contentsOf: VoiceLibrary.analysisURL(for: item.url))
+        var bad = currentAnalysis(prior); bad.turns[0].end = 4.5
+        await expectFailure { _ = try await library.refreshEmbeddings(from: reviewed, with: bad, for: item) }
+        bad = currentAnalysis(prior); bad.turns[0].embeddingSpans = [.init(start: 0.5, end: 3.5), .init(start: 3, end: 6)]
+        await expectFailure { _ = try await library.refreshEmbeddings(from: reviewed, with: bad, for: item) }
+        var stale = reviewed; stale.createdAt = stale.createdAt.addingTimeInterval(-1)
+        await expectFailure { _ = try await library.refreshEmbeddings(from: stale, with: self.currentAnalysis(prior), for: item) }
+        XCTAssertEqual(try Data(contentsOf: store), stored)
+        XCTAssertEqual(try Data(contentsOf: sidecar), original)
+        try generatedAudio(at: item.url, frequency: 0.21)
+        await expectFailure { _ = try await library.refreshEmbeddings(from: reviewed, with: self.currentAnalysis(prior), for: item) }
+        XCTAssertEqual(try Data(contentsOf: store), stored)
+        XCTAssertEqual(try Data(contentsOf: sidecar), original)
+    }
+
+    func testRefreshCannotRestoreAnEnrollmentRevokedWhileHelperWasRunning() async throws {
+        let root = try temporary(), item = try await recording(root)
+        let library = VoiceLibrary(folder: root.appendingPathComponent("Private"))
+        let prior = try analysis(item)
+        try await library.saveAnalysis(prior, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        let reviewed = try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        try await library.unconfirm(turnID: "turn-1", in: item)
+        let result = try await library.refreshEmbeddings(from: reviewed, with: currentAnalysis(prior), for: item)
+        XCTAssertNil(result.turns[0].confirmedPersonID)
+        let people = try await library.profiles()
+        XCTAssertEqual(people.count, 1)
+        XCTAssertTrue(people[0].examples.isEmpty)
+    }
+
+    func testBankFirstRefreshPublicationFailurePreservesNamesAndCanRetry() async throws {
+        let root = try temporary(), audioFolder = root.appendingPathComponent("Audio")
+        try FileManager.default.createDirectory(at: audioFolder, withIntermediateDirectories: true)
+        let item = try await recording(audioFolder), library = VoiceLibrary(folder: root.appendingPathComponent("Private"))
+        let prior = try analysis(item)
+        try await library.saveAnalysis(prior, for: item)
+        let person = try await library.createPerson(name: "Alex")
+        let reviewed = try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
+        let refreshed = currentAnalysis(prior), sidecar = VoiceLibrary.analysisURL(for: item.url)
+        let oldSidecar = try Data(contentsOf: sidecar)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: audioFolder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: audioFolder.path) }
+        await expectFailure { _ = try await library.refreshEmbeddings(from: reviewed, with: refreshed, for: item) }
+        XCTAssertEqual(try Data(contentsOf: sidecar), oldSidecar)
+        let bank = try await library.profiles()
+        XCTAssertEqual(bank[0].examples[0].recipeID, VoiceEmbeddingRecipe.current)
+        let visible = try await library.loadAnalysis(for: item)
+        XCTAssertEqual(visible?.recipeID, VoiceEmbeddingRecipe.legacy)
+        XCTAssertEqual(visible?.turns[0].confirmedPersonID, person.id)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: audioFolder.path)
+        let retried = try await library.refreshEmbeddings(from: reviewed, with: refreshed, for: item)
+        XCTAssertEqual(retried.recipeID, VoiceEmbeddingRecipe.current)
+        XCTAssertEqual(retried.turns[0].confirmedPersonID, person.id)
+        let after = try await library.profiles()
+        XCTAssertEqual(after[0].examples[0].id, bank[0].examples[0].id)
     }
 }

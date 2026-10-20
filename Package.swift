@@ -20,7 +20,8 @@ let package = Package(
         .target(name: "FastClusterWrapper", path: "vendor/FluidAudio/Sources/FastClusterWrapper", publicHeadersPath: "include"),
         .target(name: "MachTaskSelfWrapper", path: "vendor/FluidAudio/Sources/MachTaskSelfWrapper", publicHeadersPath: "include"),
         .testTarget(name: "LocalAudioCoreTests", dependencies: ["LocalAudioCore"]),
-        .testTarget(name: "LocalAudioAppTests", dependencies: ["LocalAudioApp"])
+        .testTarget(name: "LocalAudioAppTests", dependencies: ["LocalAudioApp"]),
+        .testTarget(name: "LocalAudioSpeakerTests", dependencies: ["LocalAudioSpeakers", "LocalAudioCore"])
     ],
     cxxLanguageStandard: .cxx17
 )

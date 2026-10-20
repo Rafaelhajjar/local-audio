@@ -11,7 +11,7 @@ struct Speakers {
         do {
             let arguments = Array(CommandLine.arguments.dropFirst())
             if arguments == ["--help"] {
-                print("local-audio-speakers --validate-model FOLDER\nlocal-audio-speakers --analyze REQUEST.json --models FOLDER --output RESULT.json")
+                print("local-audio-speakers --validate-model FOLDER\nlocal-audio-speakers --analyze REQUEST.json --models FOLDER --output RESULT.json\nlocal-audio-speakers --refresh-embeddings REQUEST.json --models FOLDER --output RESULT.json\nlocal-audio-speakers --embed-clips REQUEST.json --models FOLDER --output RESULT.json")
                 return
             }
             if arguments.count == 2, arguments[0] == "--validate-model" {
@@ -20,23 +20,33 @@ struct Speakers {
                 print("Local speaker models loaded and native I/O verified.")
                 return
             }
-            guard arguments.count == 6 else { throw failure("Expected --analyze REQUEST.json --models FOLDER --output RESULT.json.") }
+            guard arguments.count == 6 else { throw failure("Expected --analyze, --refresh-embeddings or --embed-clips REQUEST.json --models FOLDER --output RESULT.json.") }
             var options: [String: String] = [:]
             for index in stride(from: 0, to: arguments.count, by: 2) {
-                guard ["--analyze", "--models", "--output"].contains(arguments[index]), options[arguments[index]] == nil,
+                guard ["--analyze", "--refresh-embeddings", "--embed-clips", "--models", "--output"].contains(arguments[index]), options[arguments[index]] == nil,
                       !arguments[index + 1].isEmpty else { throw failure("Invalid or duplicate speaker-worker option.") }
                 options[arguments[index]] = arguments[index + 1]
             }
-            guard let requestPath = options["--analyze"], let modelPath = options["--models"], let outputPath = options["--output"] else {
+            guard let requestPath = options["--analyze"] ?? options["--refresh-embeddings"] ?? options["--embed-clips"],
+                  let modelPath = options["--models"], let outputPath = options["--output"] else {
                 throw failure("Missing speaker-worker option.")
             }
             let requestURL = URL(fileURLWithPath: requestPath).standardizedFileURL
             let modelURL = URL(fileURLWithPath: modelPath).standardizedFileURL
             let outputURL = URL(fileURLWithPath: outputPath).standardizedFileURL
+            if options["--embed-clips"] != nil {
+                try BatchClipEmbeddings.run(requestURL: requestURL, modelsURL: modelURL, outputURL: outputURL)
+                return
+            }
+            if options["--refresh-embeddings"] != nil {
+                try RefreshTurnEmbeddings.run(requestURL: requestURL, modelsURL: modelURL, outputURL: outputURL)
+                return
+            }
             let request = try PrivateJSON.read(VoiceAnalysisRequest.self, from: requestURL)
             guard request.audioURL.isFileURL, !request.recordingID.isEmpty,
                   request.audioHash.count == 64, request.audioHash.allSatisfy(\.isHexDigit),
-                  request.modelID == ModelPack.speakers.modelID else {
+                  request.modelID == ModelPack.speakers.modelID,
+                  request.recipeID == VoiceEmbeddingRecipe.current else {
                 throw failure("The speaker request has an invalid source identity or unsupported model ID. Reanalyze using the selected Speaker Models.")
             }
             let source = request.audioURL.standardizedFileURL
@@ -78,14 +88,7 @@ struct Speakers {
                 turns.append(VoiceTurn(id: "\(request.audioHash.prefix(16))-turn-\(turns.count)", start: start, end: end,
                     speakerID: anonymousIDs[segment.speakerId]!))
             }
-            for index in turns.indices {
-                try Task.checkCancellation()
-                guard let span = SpeakerClipPolicy.representativeSpan(for: turns[index], among: turns),
-                      let embedding = try clipper.embed(source: source, span: span) else { continue }
-                turns[index].embedding = embedding
-                turns[index].sampleStart = span.start
-                turns[index].sampleEnd = span.end
-            }
+            turns = try ProductionTurnEmbedder.extract(turns, source: source, using: clipper)
             let after = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
             guard before.fileSize == after.fileSize, before.contentModificationDate == after.contentModificationDate,
                   try RecordingLibrary.hash(source) == request.audioHash.lowercased() else {
@@ -94,8 +97,8 @@ struct Speakers {
             // Only anonymous clusters and optional clip vectors leave this helper.
             // Human identities live in the app's separate confirmation store.
             try requireNewOutput(outputURL)
-            try PrivateJSON.write(VoiceAnalysis(recordingID: request.recordingID, audioHash: request.audioHash,
-                modelID: request.modelID, turns: turns), to: outputURL)
+            try publish(VoiceAnalysis(recordingID: request.recordingID, audioHash: request.audioHash,
+                modelID: request.modelID, turns: turns, recipeID: VoiceEmbeddingRecipe.current), to: outputURL)
             print("Anonymous speaker analysis saved locally (\(turns.count) turns).")
         } catch {
             FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8))
@@ -105,10 +108,20 @@ struct Speakers {
 
     static func failure(_ text: String) -> LocalAudioError { .message(text) }
 
-    private static func requireNewOutput(_ url: URL) throws {
+    static func requireNewOutput(_ url: URL) throws {
         guard !FileManager.default.fileExists(atPath: url.path),
               (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
             throw failure("Speaker analysis output already exists. Choose a new result path; existing audio, labels and profiles are never replaced by this helper.")
         }
+    }
+
+    static func publish<T: Encodable>(_ result: T, to destination: URL) throws {
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(".speaker-result-" + UUID().uuidString + ".json")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        try PrivateJSON.write(result, to: staging)
+        try Task.checkCancellation()
+        try requireNewOutput(destination)
+        do { try FileManager.default.linkItem(at: staging, to: destination) }
+        catch { throw failure("Cannot publish a new speaker result without replacing an existing file. Choose a new local output path. " + error.localizedDescription) }
     }
 }

@@ -25,14 +25,20 @@ final class VoicePresentationTests: XCTestCase {
         return try await RecordingLibrary(folder: folder).registerSaved(audio)
     }
 
-    private func prepare(_ item: AudioRecording, bank: VoiceLibrary) async throws -> VoiceAnalysis {
+    private func prepare(_ item: AudioRecording, bank: VoiceLibrary,
+                         recipeID: String = VoiceEmbeddingRecipe.legacy) async throws -> VoiceAnalysis {
         let request = try await bank.analysisRequest(for: item, modelID: ModelPack.speakers.modelID)
         var x = [Float](repeating: 0, count: 256), y = x
         x[0] = 1; y[1] = 1
-        let turns = [VoiceTurn(id: "one", start: 0, end: 2.5, speakerID: "S1", embedding: x, sampleStart: 0, sampleEnd: 2.5),
+        var turns = [VoiceTurn(id: "one", start: 0, end: 2.5, speakerID: "S1", embedding: x, sampleStart: 0, sampleEnd: 2.5),
                      VoiceTurn(id: "two", start: 3, end: 6, speakerID: "S2", embedding: y, sampleStart: 3, sampleEnd: 6)]
+        if recipeID == VoiceEmbeddingRecipe.current {
+            for index in turns.indices {
+                turns[index].embeddingSpans = [.init(start: turns[index].sampleStart!, end: turns[index].sampleEnd!)]
+            }
+        }
         return try await bank.saveAnalysis(VoiceAnalysis(recordingID: item.id, audioHash: request.audioHash,
-            modelID: request.modelID, turns: turns), for: item)
+            modelID: request.modelID, turns: turns, recipeID: recipeID), for: item)
     }
 
     func testTranscriptChunksAbstainForUnknownMixedAndInsufficientCoverage() async throws {
@@ -134,5 +140,55 @@ final class VoicePresentationTests: XCTestCase {
         XCTAssertTrue(relaunched.profiles.isEmpty)
         XCTAssertNil(relaunched.confirmedName(start: 0, end: 2))
         XCTAssertEqual(try RecordingLibrary.hash(item.url), audioHash)
+    }
+
+    func testUpdatedProfilesMatchOnlyNewRecipeAndKeepNamesOutOfUnconfirmedExport() async throws {
+        let folder = try fixture(), bank = VoiceLibrary(folder: folder.appendingPathComponent("Voices"))
+        let first = try await recording(in: folder, value: 0.15)
+        let second = try await recording(in: folder, value: 0.25)
+        _ = try await prepare(first, bank: bank)
+        let person = try await bank.createPerson(name: "Alice")
+        _ = try await bank.confirm(turnID: "one", in: first, personID: person.id)
+        let next = try await prepare(second, bank: bank, recipeID: VoiceEmbeddingRecipe.current)
+        let controller = VoiceController(dataFolder: folder)
+        await controller.reloadProfiles(); await controller.select(second)
+        XCTAssertEqual(controller.outdatedExampleCount, 1)
+        XCTAssertNil(controller.suggestion(for: next.turns[0]), "A legacy profile cannot score a current vector.")
+        let savedPrior = try await bank.loadAnalysis(for: first)
+        let prior = try XCTUnwrap(savedPrior)
+        var refreshed = prior
+        refreshed.version = 2; refreshed.recipeID = VoiceEmbeddingRecipe.current
+        refreshed.createdAt = prior.createdAt.addingTimeInterval(1)
+        for index in refreshed.turns.indices {
+            let turn = refreshed.turns[index]
+            refreshed.turns[index].embeddingSpans = [.init(start: turn.sampleStart!, end: turn.sampleEnd!)]
+        }
+        _ = try await bank.refreshEmbeddings(from: prior, with: refreshed, for: first)
+        await controller.reloadProfiles(); await controller.select(second)
+        XCTAssertEqual(controller.outdatedExampleCount, 0)
+        XCTAssertEqual(controller.profiles.first?.examples.count, 1, "Refreshing cannot enroll an unconfirmed turn.")
+        XCTAssertEqual(controller.suggestion(for: next.turns[0])?.personID, person.id)
+        XCTAssertEqual(controller.personName(for: next.turns[0]), "Unknown")
+        let text = controller.exportedText(LocalTranscript(text: "Hello.", segments: [.init(id: 0, start: 0, end: 2, text: "Hello.")]), item: second)
+        XCTAssertTrue(text.contains("Unknown: Hello.")); XCTAssertFalse(text.contains("Alice"))
+        await controller.select(first)
+        XCTAssertFalse(controller.needsMatchingUpdate)
+        XCTAssertEqual(controller.confirmedName(start: 0, end: 2), "Alice")
+    }
+
+    func testUpdateWithoutSpeakerModelPreservesExistingNamesAndExamples() async throws {
+        let folder = try fixture(), bank = VoiceLibrary(folder: folder.appendingPathComponent("Voices"))
+        let item = try await recording(in: folder, value: 0.35)
+        let analysis = try await prepare(item, bank: bank)
+        let controller = VoiceController(dataFolder: folder)
+        await controller.select(item)
+        await controller.name(analysis.turns[0], in: item, newName: "Alice")
+        let before = try Data(contentsOf: folder.appendingPathComponent("Voices/voice-library.json"))
+        await controller.updateSavedVoices(in: [item])
+        XCTAssertNotNil(controller.error)
+        XCTAssertFalse(controller.isBusy)
+        XCTAssertTrue(controller.needsMatchingUpdate)
+        XCTAssertEqual(controller.confirmedName(start: 0, end: 2), "Alice")
+        XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("Voices/voice-library.json")), before)
     }
 }

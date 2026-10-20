@@ -12,7 +12,9 @@ The current accepted scope is an ad hoc, unnotarized development prerelease. Dev
 
 The earlier 0.1 preview has 52 passing tests in hosted CI, generated-speech offline checks, built-in capture/save/playback/quit evidence and a limited system-default AirPods silence result. See VALIDATION.md for details. CI success is not a general hardware, ASR accuracy or Gatekeeper guarantee.
 
-The 0.2 local voice-feature suite passes 88 tests, including stale-confirmation and changed-source export regressions. Both model packs remain optional; speaker suggestions never assign names automatically. Real-person recognition calibration remains open.
+The 0.2.1 voice-feature suite passes 112 tests. It covers legacy-data decoding, extraction-recipe isolation, source-balanced matching, copied-window deduplication, preserved human confirmation history, unavailable-example recovery, stale refresh rejection, interrupted sidecar publication and confirmed-only exports. Both model packs remain optional; speaker suggestions never assign names automatically. Real-person recognition calibration remains open.
+
+For upgrades from 0.2.0, keep original recordings and voice sidecars available, then use **People → Update Saved Voices**. This updates measurements for existing confirmed examples without creating labels or enrolling new examples. The updated bank/analysis schema is version 2; retain a local backup before reverting to an older preview.
 
 ## Future production release
 
