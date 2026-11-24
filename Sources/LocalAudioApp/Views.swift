@@ -29,6 +29,8 @@ struct RootView: View {
                     sidebarButton("People", image: "person.2", destination: "people")
                 }.padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 VStack(alignment: .leading, spacing: 14) {
+                    Button { store.showQuickStart = true } label: { Label("Quick start", systemImage: "sparkles").frame(maxWidth: .infinity, alignment: .leading) }
+                        .buttonStyle(.plain).disabled(store.capture.isBusy || store.isLibraryLoading)
                     SettingsLink { Label("Settings", systemImage: "gearshape").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
                     Divider()
                     Label("Stored on this Mac", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
@@ -41,6 +43,9 @@ struct RootView: View {
             else { LibraryView(store: store, record: { section = "record" }) }
         }
         .disabled(store.isShuttingDown)
+        .sheet(isPresented: $store.showQuickStart, onDismiss: { store.finishQuickStart() }) {
+            QuickStartView(store: store) { section = store.lastSavedRecording == nil ? "record" : "library" }
+        }
         .alert("LocalAudio", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -79,6 +84,9 @@ struct RecordView: View {
                         Spacer()
                         Picker("Microphone", selection: $capture.selectedDeviceID) {
                             Text("System default").tag(nil as String?)
+                            if let selected = capture.selectedDeviceID, !capture.devices.contains(where: { $0.id == selected }) {
+                                Text("Unavailable microphone").tag(Optional(selected))
+                            }
                             ForEach(capture.devices) { input in Text(input.name).tag(Optional(input.id)) }
                         }.labelsHidden().frame(maxWidth: 330)
                         .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
@@ -93,6 +101,10 @@ struct RecordView: View {
                             .foregroundStyle(capture.isRecording ? .red : .secondary)
                         LevelMeter(level: capture.level, active: capture.isRecording)
                             .frame(maxWidth: 290).accessibilityLabel("Microphone input level")
+                        Text(capture.selectedInputName).font(.caption).foregroundStyle(.secondary)
+                        if let hint = capture.signal.quietInputHint, capture.isRecording {
+                            Text(hint).font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center)
+                        }
                     }.padding(.vertical, 12)
                     HStack(spacing: 14) {
                         if capture.isRecording || capture.isStarting {
@@ -106,6 +118,7 @@ struct RecordView: View {
                     }
                     if let error = capture.lastError {
                         Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                        if capture.microphoneAccessDenied { Button("Open Microphone Settings") { openMicrophoneSettings() }.buttonStyle(.link) }
                     }
                 }
                 .padding(28).background(.background, in: RoundedRectangle(cornerRadius: 20))
@@ -169,6 +182,18 @@ struct LibraryView: View {
                 }.foregroundStyle(.orange).padding(.horizontal, 24).padding(.bottom, 12)
             }
             Divider()
+            if !store.interruptedRecordings.isEmpty && !store.capture.isBusy {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(store.interruptedRecordings.count) interrupted recording file(s) kept").font(.callout.weight(.semibold))
+                        Text("These files may contain recoverable audio. They have not been changed or marked complete.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(store.interruptedRecordings) }
+                }.padding(16)
+                Divider()
+            }
             if store.isLibraryLoading && store.recordings.isEmpty {
                 VStack(spacing: 16) {
                     ProgressView("Opening your recording folder…")

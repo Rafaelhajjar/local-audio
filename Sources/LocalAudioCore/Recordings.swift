@@ -80,6 +80,18 @@ public actor RecordingLibrary {
         try scanWithWarnings().recordings
     }
 
+    /// Hidden staging files are kept after an interruption. Report their
+    /// location without opening, repairing, renaming or deleting the original.
+    public func interruptedRecordingURLs() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            .filter { url in
+                guard url.lastPathComponent.hasPrefix(".recording-"), url.lastPathComponent.hasSuffix(".incomplete.caf") else { return false }
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                return values.isRegularFile == true && values.isSymbolicLink != true
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
     public func scanWithWarnings() throws -> (recordings: [AudioRecording], warnings: [String]) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) else { return ([], []) }

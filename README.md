@@ -6,6 +6,12 @@ Choose a microphone, press Record, and stop when you are finished. Or import an 
 
 **Development preview.** Apple silicon, macOS 15 or newer. [Preview ZIP and checksum](https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.2.1-preview.1). The app is ad hoc signed and unnotarized; Gatekeeper and clean-Mac installation are unverified, so macOS may block the downloaded build. Build-from-source instructions are below. See [validation evidence](docs/VALIDATION.md) and [the release checklist](docs/CHECKLIST.md) for tested behavior and remaining work.
 
+## First launch (0.3 source candidate)
+
+The new Quick start walkthrough shows connected microphones and asks you to connect and select the one you intend to use. Record a short sample, listen back, then optionally download the English model and transcribe the sample. The test recording stays in your library. Setup can be skipped or reopened from the sidebar; no recording or download starts automatically. Existing populated libraries open normally.
+
+A quiet-input hint helps catch the wrong microphone without rejecting valid silence. The Library reports preserved interrupted recording files and can reveal them in Finder.
+
 ## What it does
 
 - Records the system default microphone or a selected input exposed by macOS: built-in, USB, audio interface or compatible Bluetooth device. Device quality and driver behavior vary; system audio capture is outside this version.
@@ -43,6 +49,8 @@ dist/LocalAudio.app/Contents/MacOS/LocalAudio \
   --data-folder /tmp/LocalAudio-test-state \
   --recordings-folder /tmp/LocalAudio-test-recordings
 ```
+
+To create a drag-to-Applications **development** disk image, run `./scripts/make-dmg.sh` after building. Developer ID signing, notarization, and clean-Mac verification are separate steps in [the release procedure](docs/RELEASE.md). See the [physical test matrix](docs/RELEASE-TESTING.md) before making hardware compatibility claims.
 
 ## Your files
 

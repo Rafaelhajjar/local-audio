@@ -126,3 +126,23 @@ On 2026-10-17 the owner approved microphone testing and chose an ad hoc developm
 - Development preview published: https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.1.0-preview.1. Source tag points to `a46aa38`; runtime/build sources match CI-validated `d935a71`. Anonymous ZIP/checksum downloads match the tested local files. ZIP SHA-256: `59a59bac991c98a1d3124e9603c8a2af2066ee73463742819cad1891c7cc68b4`.
 
 - Voice feature 0.2: **88 tests** passed normally and with network denied. Final packaged profile persistence, new-person naming, possible-match confirmation and native reanalysis passed; final packaged speaker helper also passed a different-voice offline control. Scratch files were cleared, generated originals retained their hashes, all 725 protected source files and 653 frozen dependency files were unchanged. See the 0.2 section in VALIDATION.md for exact evidence and limits.
+
+## 0.3 candidate (November 24)
+
+- [x] Light Quick start: detected inputs, explicit sample recording/listen-back,
+  optional model setup and first transcript; skip/reopen; compatible preferences.
+- [x] Connected microphone list shows both DJI MIC MINI and MacBook Pro microphone;
+  explicit selection works. Real speech quality is a separate gate.
+- [x] Quiet-input hint preserves valid silence; no speech-based auto-stop.
+- [x] Read-only interrupted-file discovery and Show in Finder.
+- [x] Early stop at low actual free capacity; native disposable-volume stop/save
+  and subsequent preflight refusal verified.
+- [x] Current candidate native quit during capture saved readable audio and metadata.
+- [x] 117 tests with network denied; vendor hashes unchanged.
+- [x] Development DMG with Applications link; mounted app bytes/signatures checked.
+- [x] Production preparation scripts verify all binaries, notarize/staple app and
+  DMG, and generate a receipt; unsigned app rejected before notarization.
+- [ ] Developer ID certificate and notary profile available; actual production
+  signing/notarization run completed and checked.
+- [ ] Clean-Mac install; audible intended-device speech, disconnect, permission
+  denial, sleep/wake and long-session matrix completed. See RELEASE-TESTING.md.

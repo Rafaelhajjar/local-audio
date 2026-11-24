@@ -9,6 +9,7 @@ struct AppPreferences: Codable {
     var recordingsFolder: URL
     var inputID: String?
     var automaticallyTranscribe = true
+    var quickStartCompleted: Bool?
 }
 
 @MainActor
@@ -30,6 +31,9 @@ final class AppStore: ObservableObject {
     @Published var transcriptError: String?
     @Published var titleDraft = ""
     @Published var dateDraft = Date()
+    @Published var showQuickStart = false
+    @Published private(set) var lastSavedRecording: AudioRecording?
+    @Published private(set) var interruptedRecordings: [URL] = []
     let models: ModelManager
     let voices: VoiceController
     let capture = CaptureController()
@@ -96,6 +100,7 @@ final class AppStore: ObservableObject {
                 self.registrationTasks[id] = nil
             }
         }
+        capture.onUnsuccessfulFinish = { [weak self] in Task { await self?.refresh() } }
         errorMessage = initialError
         voices.canAnalyze = { [weak self] in self?.isProcessing == false && self?.isShuttingDown == false }
         voices.onWorkFinished = { [weak self] in self?.processNext() }
@@ -118,7 +123,18 @@ final class AppStore: ObservableObject {
         await models.refresh()
         await scan
         await voiceSetup
+        if preferences.quickStartCompleted != true, recordings.isEmpty, errorMessage == nil, !capture.isBusy {
+            showQuickStart = true
+        }
         processNext()
+    }
+
+    func finishQuickStart() {
+        guard !capture.isBusy else { return }
+        preferences.quickStartCompleted = true
+        showQuickStart = false
+        player.pause()
+        savePreferences()
     }
 
     func refresh() async {
@@ -128,8 +144,10 @@ final class AppStore: ObservableObject {
         defer { if latestScanID == scanID { isLibraryLoading = false } }
         do {
             let scan = try await requestedLibrary.scanWithWarnings()
+            let interrupted = try await requestedLibrary.interruptedRecordingURLs()
             guard library === requestedLibrary, latestScanID == scanID else { return }
             recordings = scan.recordings; libraryWarnings = scan.warnings
+            interruptedRecordings = interrupted
             if !recordings.contains(where: { $0.id == selection }) { selection = recordings.first?.id }
             await loadSelection()
         } catch { if library === requestedLibrary { errorMessage = error.localizedDescription } }
@@ -201,6 +219,7 @@ final class AppStore: ObservableObject {
         do {
             let item = try await library.registerSaved(url)
             await refresh(); selection = item.id; await loadSelection()
+            lastSavedRecording = item
             if automaticallyTranscribe { enqueue(item) }
         } catch { errorMessage = "Audio was saved, but its details could not be registered: " + error.localizedDescription; await refresh() }
     }

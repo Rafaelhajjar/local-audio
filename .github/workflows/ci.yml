@@ -18,9 +18,14 @@ jobs:
         run: swift test --scratch-path .build/tests
       - name: Package Apple silicon app
         run: ./scripts/build-app.sh
+      - name: Verify packaged app and create development disk image
+        run: |
+          ./scripts/verify-app.sh "$PWD/dist/LocalAudio.app"
+          ./scripts/make-dmg.sh
       - uses: actions/upload-artifact@v4
         with:
           name: LocalAudio-development-preview
           path: |
             dist/LocalAudio-*.zip
+            dist/LocalAudio-*.dmg
             dist/SHA256SUMS.txt

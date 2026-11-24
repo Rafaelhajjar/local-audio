@@ -19,7 +19,21 @@ final class CaptureController: ObservableObject {
     @Published private(set) var level: Double = -160
     @Published private(set) var elapsed: TimeInterval = 0
     @Published private(set) var lastError: String?
+    @Published private(set) var signal = CaptureSignal()
+    @Published private(set) var defaultDeviceID: String?
+    @Published private(set) var lastSavedURL: URL?
+    @Published private(set) var lastInputName: String?
     var onSaved: ((URL) -> Void)?
+    var onUnsuccessfulFinish: (() -> Void)?
+
+    var isBusy: Bool { isRecording || isStarting || isFinalizing }
+    var microphoneAccessDenied: Bool {
+        [.denied, .restricted].contains(AVCaptureDevice.authorizationStatus(for: .audio))
+    }
+    var selectedInputName: String {
+        let id = selectedDeviceID ?? defaultDeviceID
+        return devices.first { $0.id == id }?.name ?? (selectedDeviceID == nil ? "System default" : "Unavailable microphone")
+    }
 
     private var backend: CaptureBackend!
     private var activeID: UUID?
@@ -42,6 +56,9 @@ final class CaptureController: ObservableObject {
         lastError = nil
         level = -160
         elapsed = 0
+        signal = CaptureSignal()
+        lastSavedURL = nil
+        lastInputName = nil
         let selectedID = selectedDeviceID
         let allowed: Bool
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -72,15 +89,17 @@ final class CaptureController: ObservableObject {
 
     private func receive(_ event: CaptureEvent) {
         switch event {
-        case let .devices(inputs): devices = inputs
-        case let .started(id):
+        case let .devices(inputs, defaultID): devices = inputs; defaultDeviceID = defaultID
+        case let .started(id, inputName):
             guard id == activeID, !isFinalizing else { return }
+            lastInputName = inputName
             isStarting = false
             isRecording = true
         case let .meter(id, decibels, seconds):
             guard id == activeID, !isFinalizing else { return }
             level = min(0, max(-160, decibels))
             elapsed = seconds
+            signal.observe(decibels: decibels, elapsed: seconds)
         case let .finalizing(id, reason):
             guard id == activeID else { return }
             isStarting = false
@@ -99,10 +118,12 @@ final class CaptureController: ObservableObject {
             case let .saved(url, seconds, warning):
                 elapsed = seconds
                 lastError = warning
+                lastSavedURL = url
                 onSaved?(url)
-            case let .cancelled(reason): lastError = reason
+            case let .cancelled(reason): lastError = reason; onUnsuccessfulFinish?()
             case let .failed(message, recovery):
                 lastError = message + recovery.map { " The original file was kept at \($0.path). Import it manually if it can be recovered." }.orEmpty
+                onUnsuccessfulFinish?()
             }
             let waiters = stopWaiters
             stopWaiters.removeAll()
@@ -122,8 +143,8 @@ private enum CaptureResult: Sendable {
 }
 
 private enum CaptureEvent: Sendable {
-    case devices([AudioInput])
-    case started(UUID)
+    case devices([AudioInput], String?)
+    case started(UUID, String)
     case meter(UUID, Double, TimeInterval)
     case finalizing(UUID, String?)
     case finished(UUID, CaptureResult)
@@ -136,10 +157,12 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
     private let sessionQueue = DispatchQueue(label: "local.audio.capture.session", qos: .userInitiated)
     private let audioQueue = DispatchQueue(label: "local.audio.capture.writer", qos: .userInitiated)
     private let deadlineQueue = DispatchQueue(label: "local.audio.capture.deadline", qos: .userInitiated)
+    private let diskQueue = DispatchQueue(label: "local.audio.capture.disk", qos: .utility)
     private let session = AVCaptureSession()
     private let stopGate = CaptureStopGate()
     private let emit: (CaptureEvent) -> Void
     private var observers: [NSObjectProtocol] = []
+    private var workspaceObservers: [NSObjectProtocol] = []
     private let operationsLock = NSLock()
     private var operations: [UUID: CaptureOperation] = [:]
 
@@ -148,6 +171,7 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
     private var inputID: String?
     private var activeOutput: AVCaptureAudioDataOutput?
     private var watchdog: DispatchSourceTimer?
+    private var diskMonitor: DispatchSourceTimer?
     // audioQueue only
     private var run: CaptureRun?
 
@@ -173,9 +197,25 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
         observers.append(NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasConnectedNotification, object: nil, queue: nil) { [weak self] _ in
             self?.refreshInputs()
         })
+        observers.append(NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) { [weak self] _ in
+            self?.stopAll(reason: "The microphone session was interrupted. Recording stopped; the captured audio will be saved if valid.")
+        })
+        workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.stopAll(reason: "Your Mac is going to sleep. Recording stopped; check the saved audio after waking. Start a new recording to continue.")
+        })
     }
 
-    deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    deinit {
+        observers.forEach(NotificationCenter.default.removeObserver)
+        workspaceObservers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
+    }
+
+    private func stopAll(reason: String) {
+        operationsLock.lock()
+        let ids = Array(operations.keys)
+        operationsLock.unlock()
+        for id in ids { requestStop(id: id, reason: reason) }
+    }
 
     func refreshInputs() { sessionQueue.async { [weak self] in self?.discoverInputs() } }
 
@@ -184,7 +224,7 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
     }
 
     private func discoverInputs() {
-        emit(.devices(audioDevices().map { AudioInput(id: $0.uniqueID, name: $0.localizedName) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }))
+        emit(.devices(audioDevices().map { AudioInput(id: $0.uniqueID, name: $0.localizedName) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, AVCaptureDevice.default(for: .audio)?.uniqueID))
     }
 
     private func operation(id: UUID) -> CaptureOperation? {
@@ -222,8 +262,8 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
             }
             do {
                 try CaptureDestination.prepare(folder)
-                let capacity = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
-                try CaptureDestination.requireDiskSpace(availableBytes: capacity)
+                let capacity = try? CaptureDiskPolicy.availableCapacity(at: folder)
+                try CaptureDestination.requireDiskSpace(availableBytes: capacity, minimumBytes: CaptureDiskPolicy.reserveBytes)
                 let device: AVCaptureDevice?
                 if let selectedDeviceID {
                     device = self.audioDevices().first { $0.uniqueID == selectedDeviceID }
@@ -256,6 +296,7 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
                 self.sessionID = id
                 self.inputID = device.uniqueID
                 self.activeOutput = output
+                let inputName = device.localizedName
                 self.audioQueue.async { [weak self] in
                     guard let self else { return }
                     guard !self.stopGate.isStopped(id) else {
@@ -263,9 +304,10 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
                         self.sessionQueue.async { [weak self] in self?.stopSession(id: id) }
                         return
                     }
-                    self.run = CaptureRun(operation: operation, outputID: ObjectIdentifier(output), callbackQueue: self.audioQueue)
+                    self.run = CaptureRun(operation: operation, outputID: ObjectIdentifier(output), inputName: inputName, callbackQueue: self.audioQueue)
                 }
                 self.installWatchdog(id: id)
+                self.installDiskMonitor(operation: operation, folder: folder)
                 self.session.startRunning()
                 if !self.session.isRunning {
                     self.requestStop(id: id, reason: "The microphone session could not start. Check that the device is available and try again.")
@@ -316,6 +358,8 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
         guard sessionID == id else { return }
         watchdog?.cancel()
         watchdog = nil
+        diskMonitor?.cancel()
+        diskMonitor = nil
         session.stopRunning()
         activeOutput?.setSampleBufferDelegate(nil, queue: nil)
         session.beginConfiguration()
@@ -345,12 +389,29 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
         timer.resume()
     }
 
+    private func installDiskMonitor(operation: CaptureOperation, folder: URL) {
+        diskMonitor?.cancel()
+        // Capacity reads may block on a disconnected drive. Keep them off both
+        // capture queues and the independent finalization deadline queue.
+        let timer = DispatchSource.makeTimerSource(queue: diskQueue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self, operation] in
+            guard let self, !operation.completion.isCompleted, !self.stopGate.isStopped(operation.id) else { return }
+            let capacity = try? CaptureDiskPolicy.availableCapacity(at: folder)
+            if let reason = CaptureDiskPolicy.stopReason(availableBytes: capacity) {
+                self.requestStop(id: operation.id, reason: reason)
+            }
+        }
+        diskMonitor = timer
+        timer.resume()
+    }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let run, run.outputID == ObjectIdentifier(output), !run.isFinalizing, !stopGate.isStopped(run.id) else { return }
         run.lastSampleUptime = ProcessInfo.processInfo.systemUptime
         do {
             let wasFirst = try run.writer.append(sampleBuffer)
-            if wasFirst { emit(.started(run.id)) }
+            if wasFirst { emit(.started(run.id, run.inputName)) }
             if wasFirst || run.lastSampleUptime - run.lastMeterUptime >= 0.1 {
                 run.lastMeterUptime = run.lastSampleUptime
                 let level: Double
@@ -418,6 +479,7 @@ private final class CaptureRun {
     let operation: CaptureOperation
     var id: UUID { operation.id }
     let outputID: ObjectIdentifier
+    let inputName: String
     let writer: PCMRecordingWriter
     var progress: CaptureProgress { writer.progress }
     var isFinalizing = false
@@ -425,9 +487,10 @@ private final class CaptureRun {
     var lastSampleUptime = ProcessInfo.processInfo.systemUptime
     var lastMeterUptime = 0.0
 
-    init(operation: CaptureOperation, outputID: ObjectIdentifier, callbackQueue: DispatchQueue) {
+    init(operation: CaptureOperation, outputID: ObjectIdentifier, inputName: String, callbackQueue: DispatchQueue) {
         self.operation = operation
         self.outputID = outputID
+        self.inputName = inputName
         writer = PCMRecordingWriter(stagingURL: operation.stagingURL, publishedURL: operation.publishedURL,
             completionGate: operation.completion, callbackQueue: callbackQueue)
     }
