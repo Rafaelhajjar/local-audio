@@ -10,6 +10,8 @@ struct AppPreferences: Codable {
     var inputID: String?
     var automaticallyTranscribe = true
     var quickStartCompleted: Bool?
+    var microphonePolicy: MicrophonePolicy?
+    var retention: AudioRetention?
 }
 
 @MainActor
@@ -34,6 +36,16 @@ final class AppStore: ObservableObject {
     @Published var showQuickStart = false
     @Published private(set) var lastSavedRecording: AudioRecording?
     @Published private(set) var interruptedRecordings: [URL] = []
+    @Published var microphonePolicy: MicrophonePolicy
+    @Published private(set) var automaticRecordingArmed = false
+    @Published private(set) var retention: AudioRetention?
+    @Published private(set) var isManagingAudio = false
+    @Published var storageStatus: String?
+    private var maintenanceTimer: Timer?
+    private var automationWorking = false
+    private var automation = MicrophoneAutomation()
+    private var automaticInputID: String?
+    private var lastRetentionCheck = Date.distantPast
     let models: ModelManager
     let voices: VoiceController
     let capture = CaptureController()
@@ -43,6 +55,7 @@ final class AppStore: ObservableObject {
     private var preferences: AppPreferences
     private var runner: WorkerProcess?
     private var processingTask: Task<Void, Never>?
+    private var audioManagementTask: Task<Void, Never>?
     private var importTask: Task<Void, Never>?
     private var registrationTasks: [UUID: Task<Void, Never>] = [:]
     private var jobsWritable = true
@@ -51,14 +64,66 @@ final class AppStore: ObservableObject {
     private var latestScanID = UUID()
     private var presentationUpdates = Set<AnyCancellable>()
 
+    var canManageAudio: Bool { !isShuttingDown && !isManagingAudio && !isImporting && !isProcessing && !voices.isBusy && registrationTasks.isEmpty }
     var selected: AudioRecording? { recordings.first { $0.id == selection } }
     var pendingCount: Int { jobs.filter { $0.status != .failed }.count }
-    var canChangeFolder: Bool { !isShuttingDown && !capture.isRecording && !capture.isStarting && !capture.isFinalizing && !isProcessing && !isImporting && !voices.isBusy && registrationTasks.isEmpty }
+    var canChangeFolder: Bool { !isShuttingDown && !isManagingAudio && !automaticRecordingArmed && !capture.isRecording && !capture.isStarting && !capture.isFinalizing && !isProcessing && !isImporting && !voices.isBusy && registrationTasks.isEmpty }
 
     func startRecording() async {
-        guard !isShuttingDown else { return }
+        automaticRecordingArmed = false
+        await beginCapture()
+    }
+
+    private func beginCapture() async {
+        guard !isShuttingDown, !capture.isBusy else { return }
+        guard let input = microphonePolicy.resolve(devices: capture.devices, selectedID: capture.selectedDeviceID, defaultID: capture.defaultDeviceID) else {
+            errorMessage = "Connect an allowed microphone. The Mac microphone will not be used as a fallback."
+            return
+        }
         player.pause()
-        await capture.start(in: recordingsFolder)
+        automaticInputID = automaticRecordingArmed ? input.id : nil
+        await capture.start(in: recordingsFolder, deviceID: input.id)
+    }
+
+    func stopRecording() async {
+        automaticRecordingArmed = false
+        await capture.stop()
+    }
+
+    func setMicrophonePolicy(_ policy: MicrophonePolicy) {
+        guard !capture.isBusy else { return }
+        automaticRecordingArmed = false
+        microphonePolicy = policy; savePreferences()
+    }
+
+    func toggleAutomaticRecording() {
+        guard microphonePolicy.mode != .manual, !showQuickStart else { return }
+        automation = MicrophoneAutomation()
+        automaticRecordingArmed.toggle()
+        if !automaticRecordingArmed { Task { await capture.stop() } }
+        else { Task { await maintain() } }
+    }
+
+    private func maintain() async {
+        guard !isShuttingDown, !automationWorking else { return }
+        automationWorking = true
+        defer { automationWorking = false }
+        if automaticRecordingArmed, !showQuickStart {
+            automation.connected(capture.devices)
+            if !capture.isBusy {
+                let available = automation.available(capture.devices)
+                if let input = microphonePolicy.resolve(devices: available, selectedID: nil, defaultID: nil) {
+                    player.pause(); automaticInputID = input.id
+                    await capture.start(in: recordingsFolder, deviceID: input.id)
+                }
+            } else if capture.isRecording, capture.elapsed >= 30 * 60 {
+                await capture.stop()
+            }
+        }
+        if Date().timeIntervalSince(lastRetentionCheck) >= 3600 {
+            lastRetentionCheck = Date()
+            await cleanUpAudio()
+        }
     }
 
     init(paths: LaunchPaths) {
@@ -74,6 +139,8 @@ final class AppStore: ObservableObject {
             catch { initialError = "Saved settings could not be read and have been preserved. " + error.localizedDescription; preferencesWritable = false }
         }
         if let override = paths.recordingsOverride { preferences.recordingsFolder = override }
+        microphonePolicy = preferences.microphonePolicy ?? MicrophonePolicy()
+        retention = preferences.retention
         self.preferences = preferences
         recordingsFolder = preferences.recordingsFolder
         automaticallyTranscribe = preferences.automaticallyTranscribe
@@ -92,6 +159,11 @@ final class AppStore: ObservableObject {
             } catch { initialError = "The unfinished transcription list could not be read and has been preserved. " + error.localizedDescription; jobsWritable = false }
         }
         capture.selectedDeviceID = preferences.inputID
+        capture.onFinished = { [weak self] in
+            guard let self else { return }
+            if self.capture.lastError != nil, let id = self.automaticInputID { self.automation.failed(id) }
+            self.automaticInputID = nil
+        }
         capture.onSaved = { [weak self] url in
             guard let self else { return }
             let id = UUID()
@@ -102,7 +174,7 @@ final class AppStore: ObservableObject {
         }
         capture.onUnsuccessfulFinish = { [weak self] in Task { await self?.refresh() } }
         errorMessage = initialError
-        voices.canAnalyze = { [weak self] in self?.isProcessing == false && self?.isShuttingDown == false }
+        voices.canAnalyze = { [weak self] in self?.isProcessing == false && self?.isShuttingDown == false && self?.isManagingAudio == false }
         voices.onWorkFinished = { [weak self] in self?.processNext() }
         voices.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &presentationUpdates)
         // Computed store values depend on nested state. Forward state changes,
@@ -126,7 +198,11 @@ final class AppStore: ObservableObject {
         if preferences.quickStartCompleted != true, recordings.isEmpty, errorMessage == nil, !capture.isBusy {
             showQuickStart = true
         }
+        maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.maintain() }
+        }
         processNext()
+        await cleanUpAudio()
     }
 
     func finishQuickStart() {
@@ -170,12 +246,14 @@ final class AppStore: ObservableObject {
     }
 
     func saveDetails() async {
-        guard let selected else { return }
+        guard let selected, !isManagingAudio else { return }
         do { try await library.update(selected, title: titleDraft, date: dateDraft); await refresh() }
         catch { errorMessage = error.localizedDescription }
     }
 
     func savePreferences() {
+        preferences.microphonePolicy = microphonePolicy
+        preferences.retention = retention
         preferences.inputID = capture.selectedDeviceID
         preferences.automaticallyTranscribe = automaticallyTranscribe
         preferences.recordingsFolder = recordingsFolder
@@ -190,12 +268,14 @@ final class AppStore: ObservableObject {
         panel.message = "Choose where LocalAudio saves original recordings and imported copies."
         panel.directoryURL = recordingsFolder
         guard panel.runModal() == .OK, let folder = panel.url, canChangeFolder else { return }
-        recordingsFolder = folder; library = RecordingLibrary(folder: folder); selection = nil; player.pause(); savePreferences()
+        recordingsFolder = folder; library = RecordingLibrary(folder: folder); selection = nil; player.pause()
+        if let retention { self.retention = AudioRetention(days: retention.days) }
+        savePreferences()
         Task { await refresh() }
     }
 
     func importFiles() {
-        guard !isShuttingDown, !isLibraryLoading, !isImporting else { return }
+        guard !isShuttingDown, !isManagingAudio, !isLibraryLoading, !isImporting else { return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.audio]; panel.allowsMultipleSelection = true
         panel.message = "Import copies of your audio files. The originals stay where they are."
         guard panel.runModal() == .OK, !isShuttingDown else { return }
@@ -225,6 +305,7 @@ final class AppStore: ObservableObject {
     }
 
     func enqueue(_ item: AudioRecording) {
+        guard item.hasAudio, !isManagingAudio else { return }
         guard jobsWritable else { errorMessage = "The saved work list needs recovery before adding jobs. Audio remains available in your recording folder."; return }
         let old = jobs
         if let index = jobs.firstIndex(where: { $0.id == item.id }) {
@@ -254,7 +335,7 @@ final class AppStore: ObservableObject {
     func pauseQueue() { queuePaused = true; runner?.cancel() }
 
     func processNext() {
-        guard !isShuttingDown, !isProcessing, processingTask == nil, !voices.isBusy, !queuePaused, jobsWritable, !models.isBusy, models.isReady, let modelFolder = models.modelDirectory,
+        guard !isShuttingDown, !isManagingAudio, !isProcessing, processingTask == nil, !voices.isBusy, !queuePaused, jobsWritable, !models.isBusy, models.isReady, let modelFolder = models.modelDirectory,
               let index = jobs.firstIndex(where: { $0.status == .queued }) else { return }
         let job = jobs[index]
         jobs[index].status = .running
@@ -294,7 +375,8 @@ final class AppStore: ObservableObject {
         guard let selected, let transcript else { return }
         let panel = NSSavePanel(); panel.allowedContentTypes = [.plainText]; panel.nameFieldStringValue = selected.title + ".txt"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard url.resolvingSymlinksInPath() != selected.url.resolvingSymlinksInPath(), url.resolvingSymlinksInPath() != selected.transcriptURL.resolvingSymlinksInPath() else { errorMessage = "Choose a different file so the audio and transcript remain safe."; return }
+        let protectedURLs = [selected.url, selected.transcriptURL, AudioRecording.metadataURL(for: selected.url), VoiceLibrary.analysisURL(for: selected.url)]
+        guard !protectedURLs.contains(where: { $0.resolvingSymlinksInPath() == url.resolvingSymlinksInPath() }) else { errorMessage = "Choose a different file so the audio and its sidecars remain safe."; return }
         Task {
             do {
                 let text = try await voices.validatedExportedText(transcript, item: selected)
@@ -303,14 +385,90 @@ final class AppStore: ObservableObject {
         }
     }
 
+    func setRetention(days: Int?) {
+        retention = days.map { AudioRetention(days: $0) }
+        savePreferences()
+        storageStatus = days == nil ? "Automatic cleanup is off." : "Cleanup enabled. Existing audio gets a fresh \(days!) days before it can expire."
+    }
+
+    private func protectedAudioIDs() async throws -> Set<String> {
+        guard jobsWritable, preferencesWritable else { throw LocalAudioError.message("Recover saved settings and unfinished work before cleaning audio.") }
+        return try await voices.protectedRecordingIDs().union(Set(jobs.map(\.id)))
+    }
+
+    func setVaulted(_ item: AudioRecording, _ value: Bool) async {
+        await manageAudio {
+            try await self.library.setVaulted(item, value)
+        }
+    }
+
+    func savePassage(_ item: AudioRecording, start: Double, end: Double, title: String) async {
+        await manageAudio {
+            let clip = try await self.library.savePassage(item, start: start, end: end, title: title)
+            self.storageStatus = "Passage saved permanently in the vault."
+            await self.refresh(); self.selection = clip.id; await self.loadSelection()
+        }
+    }
+
+    func removeAudio(_ item: AudioRecording) async {
+        await manageAudio {
+            let protected = try await self.protectedAudioIDs()
+            if self.selected?.id == item.id { self.player.pause() }
+            try await self.library.trashAudio(item, protectedIDs: protected)
+            self.storageStatus = "Audio moved to Trash. Transcript kept."
+        }
+    }
+
+    func restoreAudio(_ item: AudioRecording) async {
+        await manageAudio {
+            try await self.library.restoreAudio(item)
+            self.storageStatus = "Audio restored. Its retention window starts again today."
+        }
+    }
+
+    func cleanUpAudio() async {
+        guard let retention else { return }
+        await manageAudio {
+            let protected = try await self.protectedAudioIDs()
+            try await self.library.adoptAudioForRetention()
+            let candidates = try await self.library.scan().filter { retention.isDue($0) && !protected.contains($0.id) }
+            var removed = 0
+            for item in candidates {
+                if self.selected?.id == item.id && self.player.isPlaying { continue }
+                // Missing, corrupt and future-version transcripts preserve audio.
+                guard let text = try? PrivateJSON.read(LocalTranscript.self, from: item.transcriptURL), text.version == 1 else { continue }
+                try await self.library.trashAudio(item, protectedIDs: protected)
+                removed += 1
+            }
+            self.storageStatus = "Cleanup complete: \(removed) audio file(s) moved to Trash. Text and vault audio kept."
+        }
+    }
+
+    private func manageAudio(_ operation: @escaping @MainActor () async throws -> Void) async {
+        guard canManageAudio else { return }
+        isManagingAudio = true
+        let task = Task { @MainActor in
+            do { try await operation() } catch { self.errorMessage = error.localizedDescription }
+            await self.refresh()
+            self.isManagingAudio = false
+        }
+        audioManagementTask = task
+        await task.value
+        audioManagementTask = nil
+        processNext()
+    }
+
     func prepareToQuit() async {
         isShuttingDown = true
+        automaticRecordingArmed = false
+        maintenanceTimer?.invalidate()
         queuePaused = true
         runner?.cancel()
         models.cancel()
         voices.beginShutdown()
         await capture.stop()
         for task in Array(registrationTasks.values) { await task.value }
+        if let audioManagementTask { await audioManagementTask.value }
         if let importTask { await importTask.value }
         if let processingTask { await processingTask.value }
         await models.cancelAndWait()
@@ -336,9 +494,9 @@ final class PlaybackController: ObservableObject {
         }
     }
     func load(_ item: AudioRecording?) {
-        guard currentURL != item?.url else { return }
+        guard currentURL != item?.url || (audio != nil) != (item?.hasAudio == true) else { return }
         pause(); audio = nil; currentURL = item?.url; position = 0; duration = 0; error = nil
-        guard let item else { return }
+        guard let item, item.hasAudio else { return }
         do { audio = try AVAudioPlayer(contentsOf: item.url); audio?.enableRate = true; audio?.rate = rate; duration = audio?.duration ?? item.duration }
         catch { self.error = "This audio could not be opened for playback: " + error.localizedDescription }
     }

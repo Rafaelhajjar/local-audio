@@ -53,7 +53,7 @@ struct RecordingCommands: Commands {
         CommandMenu("Recording") {
             Button("Start Recording") { Task { await store.startRecording() } }
                 .disabled(store.isShuttingDown || capture.isRecording || capture.isStarting || capture.isFinalizing)
-            Button("Stop & Save") { Task { await capture.stop() } }
+            Button("Stop & Save") { Task { await store.stopRecording() } }
                 .disabled(!capture.isRecording && !capture.isStarting)
         }
     }
@@ -84,10 +84,11 @@ struct MenuBarView: View {
     init(store: AppStore, showWindow: @escaping () -> Void) { self.store = store; capture = store.capture; self.showWindow = showWindow }
     var body: some View {
         Text(capture.isRecording ? "Recording · " + clock(capture.elapsed) : "LocalAudio")
+        if store.automaticRecordingArmed { Button("Pause Automatic Recording & Save") { Task { await store.stopRecording() } } }
         Button("Show LocalAudio", action: showWindow).disabled(store.isShuttingDown)
         Divider()
         if capture.isRecording || capture.isStarting {
-            Button("Stop & Save") { Task { await capture.stop() } }
+            Button("Stop & Save") { Task { await store.stopRecording() } }
         } else {
             Button("Start Recording") { Task { await store.startRecording() } }.disabled(capture.isFinalizing || store.isShuttingDown)
         }

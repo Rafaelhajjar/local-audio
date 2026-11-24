@@ -2,12 +2,10 @@ import AppKit
 import AVFoundation
 import Combine
 import CoreMedia
+import CoreAudio
 import LocalAudioCore
 
-struct AudioInput: Identifiable, Equatable, Sendable {
-    let id: String
-    let name: String
-}
+typealias AudioInput = MicrophoneChoice
 
 @MainActor
 final class CaptureController: ObservableObject {
@@ -23,6 +21,7 @@ final class CaptureController: ObservableObject {
     @Published private(set) var defaultDeviceID: String?
     @Published private(set) var lastSavedURL: URL?
     @Published private(set) var lastInputName: String?
+    var onFinished: (() -> Void)?
     var onSaved: ((URL) -> Void)?
     var onUnsuccessfulFinish: (() -> Void)?
 
@@ -48,7 +47,7 @@ final class CaptureController: ObservableObject {
 
     func refreshInputs() { backend.refreshInputs() }
 
-    func start(in folder: URL) async {
+    func start(in folder: URL, deviceID: String? = nil) async {
         guard activeID == nil, !isStarting, !isRecording, !isFinalizing else { return }
         let id = UUID()
         activeID = id
@@ -59,7 +58,7 @@ final class CaptureController: ObservableObject {
         signal = CaptureSignal()
         lastSavedURL = nil
         lastInputName = nil
-        let selectedID = selectedDeviceID
+        let selectedID = deviceID ?? selectedDeviceID
         let allowed: Bool
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: allowed = true
@@ -125,6 +124,7 @@ final class CaptureController: ObservableObject {
                 lastError = message + recovery.map { " The original file was kept at \($0.path). Import it manually if it can be recovered." }.orEmpty
                 onUnsuccessfulFinish?()
             }
+            onFinished?()
             let waiters = stopWaiters
             stopWaiters.removeAll()
             waiters.forEach { $0.resume() }
@@ -224,7 +224,7 @@ private final class CaptureBackend: NSObject, AVCaptureAudioDataOutputSampleBuff
     }
 
     private func discoverInputs() {
-        emit(.devices(audioDevices().map { AudioInput(id: $0.uniqueID, name: $0.localizedName) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, AVCaptureDevice.default(for: .audio)?.uniqueID))
+        emit(.devices(audioDevices().map { AudioInput(id: $0.uniqueID, name: $0.localizedName, isBuiltIn: UInt32(bitPattern: $0.transportType) == kAudioDeviceTransportTypeBuiltIn) }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }, AVCaptureDevice.default(for: .audio)?.uniqueID))
     }
 
     private func operation(id: UUID) -> CaptureOperation? {

@@ -30,7 +30,8 @@ Requires Apple silicon and macOS 15 or newer.
 $NOTICE
 
 Quick start guides you through a short recording and optional English model setup.
-Recording begins only when you press Record. Model setup downloads about 464 MB;
+Recording begins only when you press Record or enable automatic recording.
+Model setup downloads about 464 MB;
 audio and transcripts stay on your Mac. No account is required.
 
 Removing the app leaves your recordings and installed models in place.

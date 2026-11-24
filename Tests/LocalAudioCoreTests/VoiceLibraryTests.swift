@@ -55,6 +55,8 @@ final class VoiceLibraryTests: XCTestCase {
         XCTAssertTrue(profiles[0].examples.isEmpty)
         let confirmed = try await library.confirm(turnID: "turn-1", in: item, personID: person.id)
         XCTAssertEqual(confirmed.turns[0].confirmedPersonID, person.id)
+        let protected = try await library.protectedRecordingIDs()
+        XCTAssertTrue(protected.contains(item.id))
         let restarted = VoiceLibrary(folder: folder)
         profiles = try await restarted.profiles()
         XCTAssertEqual(profiles.count, 1)

@@ -2,7 +2,7 @@
 
 Build one clean native Mac app for standard microphone recording, imported audio, local transcription, playback and text export. Private data and inference stay on the computer. Explicit model setup is the app's only network operation. No accounts, cloud backend, uploads, telemetry, automatic network checks, database or plugin/agent runtime.
 
-Keep storage understandable: original audio in a recording folder, JSON/text sidecars, plus small private settings and work-list files. Preserve originals, report capture and processing failures accurately, keep Stop intentional, and resume unfinished transcription simply. Never add recordings, model weights, personal metadata, logs, credentials or user caches to Git. Do not modify installed applications or existing user archives while developing or testing.
+Keep storage understandable: original audio in a recording folder, JSON/text sidecars, plus small private settings and work-list files. Preserve originals by default. User-enabled retention may move only transcribed, unprotected library audio to macOS Trash, preserving transcript sidecars; vault audio and voice examples stay protected. Report capture and processing failures accurately, keep Stop intentional, and resume unfinished transcription simply. Never add recordings, model weights, personal metadata, logs, credentials or user caches to Git. Do not modify installed applications or existing user archives while developing or testing.
 
 The frozen vendor source must remain unchanged. Check its file hashes and retain licenses. Root targets compile the checked-in Swift/C/C++ sources without the optional NeMo binary engine. No package download is needed to build.
 

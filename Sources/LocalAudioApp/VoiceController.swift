@@ -61,7 +61,7 @@ final class VoiceController: ObservableObject {
         let id = UUID(); selectionID = id
         selected = item; analysis = nil; isLoading = item != nil
         defer { if selectionID == id { isLoading = false } }
-        guard let item else { return }
+        guard let item, item.hasAudio else { return }
         do {
             let loaded = try await library.loadAnalysis(for: item)
             guard selectionID == id else { return }
@@ -253,7 +253,7 @@ final class VoiceController: ObservableObject {
     }
 
     private func mutate(item: AudioRecording?, operation: @escaping (VoiceLibrary) async throws -> Void) async {
-        guard !shuttingDown, !isEditing, !isAnalyzing else { return }
+        guard !shuttingDown, !isEditing, !isAnalyzing, canAnalyze() else { return }
         let id = UUID(); isEditing = true; error = nil
         let library = library
         let task = Task { [weak self] in
@@ -287,7 +287,10 @@ final class VoiceController: ObservableObject {
         return covered / (end - start) >= 0.9 ? person.name : nil
     }
 
+    func protectedRecordingIDs() async throws -> Set<String> { try await library.protectedRecordingIDs() }
+
     func validatedExportedText(_ transcript: LocalTranscript, item: AudioRecording) async throws -> String {
+        guard item.hasAudio else { return transcript.exportedText(title: item.title, recordedAt: item.date) }
         do {
             let current = try await library.loadAnalysis(for: item)
             let people = try await library.profiles()

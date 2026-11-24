@@ -11,6 +11,11 @@ public actor VoiceLibrary {
 
     public static func analysisURL(for audio: URL) -> URL { audio.appendingPathExtension("voices.json") }
 
+    public func protectedRecordingIDs() throws -> Set<String> {
+        let state = try readState()
+        return Set(state.profiles.flatMap { $0.examples.map(\.recordingID) }).union(state.confirmations.map(\.recordingID))
+    }
+
     public func profiles() throws -> [VoiceProfile] { try readState().profiles }
 
     @discardableResult

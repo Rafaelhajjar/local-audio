@@ -90,7 +90,7 @@ struct QuickStartView: View {
             Text("A few moments to check your microphone and try your first recording.").foregroundStyle(.secondary)
             feature("mic", "Record or import", "Use your Mac microphone, a connected mic, or an audio file.")
             feature("doc.text", "Turn audio into text", "Add the optional English model whenever you're ready.")
-            feature("folder", "Keep your originals", "Your recordings are ordinary files, in a folder you choose.")
+            feature("folder", "Choose what stays", "Keep transcripts, set an audio limit, and save favorite passages in your vault.")
         case 1:
             Text(busy ? "Say a few words." : "Connect the mic you want to use.").font(.title2.weight(.semibold))
             if busy {
@@ -99,7 +99,13 @@ struct QuickStartView: View {
             } else {
                 captureError
                 Text("Plug in your microphone or connect it over Bluetooth, then select it below. This list updates as microphones connect.").foregroundStyle(.secondary)
-                InputPicker(capture: capture)
+                Toggle("Allow the built-in Mac microphone", isOn: Binding(get: { store.microphonePolicy.allowMacMicrophone }, set: { value in
+                    var policy = store.microphonePolicy; policy.allowMacMicrophone = value
+                    if !value && policy.mode == .macAlways { policy.mode = .approved }
+                    store.setMicrophonePolicy(policy)
+                }))
+                InputPicker(capture: capture, policy: store.microphonePolicy)
+                Text("For several approved microphones or automatic recording, use Settings → Microphones after setup.").font(.caption).foregroundStyle(.secondary)
                 Text("Say a few words, then Stop & Save. Your test stays in your library.").font(.callout).foregroundStyle(.secondary)
             }
             if busy {
@@ -180,7 +186,7 @@ struct QuickStartView: View {
             Button("Let's begin") { move(to: 1) }.buttonStyle(.borderedProminent).controlSize(.large)
         case 1:
             if capture.isStarting || capture.isRecording {
-                Button("Stop & Save") { Task { await capture.stop() } }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
+                Button("Stop & Save") { Task { await store.stopRecording() } }.buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
             } else {
                 Button(capture.isFinalizing || waitingForTest ? "Saving…" : "Record a sample") {
                     waitingForTest = true
@@ -229,6 +235,14 @@ struct QuickStartView: View {
 
 struct InputPicker: View {
     @ObservedObject var capture: CaptureController
+    var policy: MicrophonePolicy
+    private var allowed: [AudioInput] {
+        capture.devices.filter { mic in
+            (policy.allowMacMicrophone || !mic.isBuiltIn) &&
+            (policy.mode != .approved || policy.approved.contains(where: { $0.id == mic.id })) &&
+            (policy.mode != .macAlways || mic.isBuiltIn)
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -238,17 +252,19 @@ struct InputPicker: View {
             }
             ScrollView {
                 VStack(spacing: 6) {
-                    inputRow(id: nil, name: "System default", detail: capture.devices.first { $0.id == capture.defaultDeviceID }?.name ?? "No default input available")
+                    if policy.mode == .manual, allowed.contains(where: { $0.id == capture.defaultDeviceID }) {
+                        inputRow(id: nil, name: "System default", detail: allowed.first { $0.id == capture.defaultDeviceID }?.name)
+                    }
                 if let selected = capture.selectedDeviceID, !capture.devices.contains(where: { $0.id == selected }) {
                         inputRow(id: selected, name: "Unavailable microphone", detail: "Reconnect it or select another input.")
                     }
-                    ForEach(capture.devices) { input in
+                    ForEach(allowed) { input in
                         inputRow(id: input.id, name: input.name, detail: nil)
                     }
                 }
             }.frame(maxHeight: 150)
-            if capture.devices.isEmpty {
-                Text("No microphones detected yet. Check your cable or Bluetooth connection, then Refresh.").font(.callout).foregroundStyle(.orange)
+            if allowed.isEmpty {
+                Text("Connect an allowed microphone, or review your microphone preferences in Settings.").font(.callout).foregroundStyle(.orange)
             } else {
                 Text("Don't see yours? Check its cable, power, or Bluetooth connection, then Refresh.").font(.caption).foregroundStyle(.secondary)
             }
@@ -256,9 +272,11 @@ struct InputPicker: View {
     }
 
     private func inputRow(id: String?, name: String, detail: String?) -> some View {
-        Button { capture.selectedDeviceID = id } label: {
+        Button {
+            capture.selectedDeviceID = id
+        } label: {
             HStack(spacing: 10) {
-                Image(systemName: capture.selectedDeviceID == id ? "checkmark.circle.fill" : "circle").foregroundStyle(Color.accentTeal)
+                Image(systemName: (policy.mode == .manual ? capture.selectedDeviceID == id : policy.resolve(devices: allowed, selectedID: nil, defaultID: nil)?.id == id) ? "checkmark.circle.fill" : "circle").foregroundStyle(Color.accentTeal)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name).font(.callout.weight(.medium))
                     if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
