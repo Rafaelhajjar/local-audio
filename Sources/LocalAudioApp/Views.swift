@@ -88,6 +88,8 @@ struct RecordView: View {
                         Picker("Microphone", selection: $capture.selectedDeviceID) {
                             if store.microphonePolicy.allowMacMicrophone || capture.devices.contains(where: { $0.id == capture.defaultDeviceID && !$0.isBuiltIn }) {
                                 Text("System default").tag(nil as String?)
+                            } else {
+                                Text("Choose an allowed microphone").tag(nil as String?)
                             }
                             if let selected = capture.selectedDeviceID, !capture.devices.contains(where: { $0.id == selected }) {
                                 Text("Unavailable microphone").tag(Optional(selected))
@@ -234,7 +236,7 @@ struct LibraryView: View {
                             }
                         }.listStyle(.inset)
                     }.frame(minWidth: 230, idealWidth: 275, maxWidth: 340)
-                    if store.selected != nil { RecordingDetail(store: store) }
+                    if let selected = store.selected, !vaultOnly || selected.metadata.vaultedAt != nil { RecordingDetail(store: store) }
                     else { ContentUnavailableView("Choose a recording", systemImage: "doc.text") }
                 }
             }
