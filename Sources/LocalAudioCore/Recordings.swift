@@ -9,6 +9,16 @@ public struct RecordingMetadata: Codable, Equatable, Sendable {
     public var recordedAt: Date
     public var importedFrom: String?
     public var sourceHash: String?
+    public var managedAt: Date?
+    public var vaultedAt: Date?
+    public var clipSourceID: String?
+    public var clipStart: Double?
+    public var clipEnd: Double?
+    public var audioRemovedAt: Date?
+    public var retainedDuration: Double?
+    public var retainedBytes: Int64?
+    public var trashedAudioURL: URL?
+    public var removedAudioHash: String?
 
     public init(id: String = UUID().uuidString, title: String, recordedAt: Date, importedFrom: String? = nil, sourceHash: String? = nil) {
         self.id = id; self.title = title; self.recordedAt = recordedAt
@@ -21,6 +31,7 @@ public struct AudioRecording: Identifiable, Equatable, Sendable {
     public var metadata: RecordingMetadata
     public let duration: Double
     public let bytes: Int64
+    public var hasAudio: Bool = true
     public var id: String { metadata.id }
     public var title: String { metadata.title }
     public var date: Date { metadata.recordedAt }
@@ -80,6 +91,18 @@ public actor RecordingLibrary {
         try scanWithWarnings().recordings
     }
 
+    /// Hidden staging files are kept after an interruption. Report their
+    /// location without opening, repairing, renaming or deleting the original.
+    public func interruptedRecordingURLs() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: folder.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            .filter { url in
+                guard url.lastPathComponent.hasPrefix(".recording-"), url.lastPathComponent.hasSuffix(".incomplete.caf") else { return false }
+                let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                return values.isRegularFile == true && values.isSymbolicLink != true
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
     public func scanWithWarnings() throws -> (recordings: [AudioRecording], warnings: [String]) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory) else { return ([], []) }
@@ -91,7 +114,24 @@ public actor RecordingLibrary {
         var result: [AudioRecording] = []
         var warnings: [String] = []
         var identities = Set<String>()
-        for case let url as URL in enumerator where Self.supportedExtensions.contains(url.pathExtension.lowercased()) {
+        for case let candidate as URL in enumerator {
+            let url: URL
+            if Self.supportedExtensions.contains(candidate.pathExtension.lowercased()) { url = candidate }
+            else if candidate.lastPathComponent.hasSuffix(".localaudio.json") {
+                url = candidate.deletingPathExtension().deletingPathExtension()
+                guard !FileManager.default.fileExists(atPath: url.path) else { continue }
+                // Only an explicit audio-removal receipt can represent missing audio.
+                do {
+                    let metadata = try PrivateJSON.read(RecordingMetadata.self, from: candidate)
+                    guard metadata.audioRemovedAt != nil else {
+                        warnings.append(url.lastPathComponent + ": audio is missing; its sidecars have been preserved.")
+                        continue
+                    }
+                } catch {
+                    warnings.append(candidate.lastPathComponent + ": " + error.localizedDescription)
+                    continue
+                }
+            } else { continue }
             do {
                 let item = try describe(url)
                 guard identities.insert(item.id).inserted else {
@@ -107,6 +147,14 @@ public actor RecordingLibrary {
     }
 
     public func describe(_ url: URL) throws -> AudioRecording {
+        if !FileManager.default.fileExists(atPath: url.path) {
+            let metadata = try PrivateJSON.read(RecordingMetadata.self, from: AudioRecording.metadataURL(for: url))
+            guard metadata.version == 1, metadata.audioRemovedAt != nil,
+                  let duration = metadata.retainedDuration, duration.isFinite, duration > 0 else {
+                throw LocalAudioError.message("The audio is missing without a valid removal receipt.")
+            }
+            return AudioRecording(url: url, metadata: metadata, duration: duration, bytes: 0, hasAudio: false)
+        }
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .creationDateKey])
         guard values.isRegularFile == true else { throw LocalAudioError.message("Choose an audio file.") }
         let audio = try AVAudioFile(forReading: url)
@@ -129,7 +177,8 @@ public actor RecordingLibrary {
         let item = try describe(url)
         if !FileManager.default.fileExists(atPath: AudioRecording.metadataURL(for: url).path) {
             let formatter = DateFormatter(); formatter.dateFormat = "MMM d, h:mm a"
-            let metadata = RecordingMetadata(title: "Recording · " + formatter.string(from: item.date), recordedAt: item.date)
+            var metadata = RecordingMetadata(title: "Recording · " + formatter.string(from: item.date), recordedAt: item.date)
+            metadata.managedAt = Date()
             try PrivateJSON.write(metadata, to: AudioRecording.metadataURL(for: url))
         }
         return try describe(url)
@@ -143,7 +192,7 @@ public actor RecordingLibrary {
         if source.standardizedFileURL.path.hasPrefix(folder.path + "/") { return original }
         let before = try source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let hash = try Self.hash(source)
-        for item in try scan() where item.metadata.sourceHash == hash { return item }
+        for item in try scan() where item.hasAudio && item.metadata.sourceHash == hash { return item }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let destination = folder.appendingPathComponent(UUID().uuidString + "." + source.pathExtension.lowercased())
         let staging = folder.appendingPathComponent(".import-" + UUID().uuidString)
@@ -155,7 +204,8 @@ public actor RecordingLibrary {
         try FileManager.default.moveItem(at: staging, to: destination)
         do {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
-            let metadata = RecordingMetadata(title: source.deletingPathExtension().lastPathComponent, recordedAt: original.date, importedFrom: source.lastPathComponent, sourceHash: hash)
+            var metadata = RecordingMetadata(title: source.deletingPathExtension().lastPathComponent, recordedAt: original.date, importedFrom: source.lastPathComponent, sourceHash: hash)
+            metadata.managedAt = Date()
             try PrivateJSON.write(metadata, to: AudioRecording.metadataURL(for: destination))
             return try describe(destination)
         } catch {
@@ -166,7 +216,7 @@ public actor RecordingLibrary {
     }
 
     public func update(_ item: AudioRecording, title: String, date: Date) throws {
-        var metadata = item.metadata
+        var metadata = try describe(item.url).metadata
         metadata.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if metadata.title.isEmpty { metadata.title = item.url.deletingPathExtension().lastPathComponent }
         metadata.recordedAt = date

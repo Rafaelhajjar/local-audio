@@ -25,3 +25,46 @@ For upgrades from 0.2.0, keep original recordings and voice sidecars available, 
 5. Publish the exact tested signed/stapled ZIP, checksum, source tag and concise compatibility/limitation notes. Update the production checklist only with observed evidence.
 
 The repository contains no signing identity, provisioning profile or notary credentials. An ad hoc preview does not substitute for public Gatekeeper validation.
+
+## 0.3 installation tooling and credentials
+
+The version is read from the root VERSION file by default. `BUILD_NUMBER` can be
+set for a new build. Notarization derives the version from the packaged app and
+refuses a mismatched VERSION override. Preview packaging remains possible
+without signing credentials:
+
+```sh
+./scripts/build-app.sh
+./scripts/verify-app.sh "$PWD/dist/LocalAudio.app"
+./scripts/make-dmg.sh
+```
+
+This produces an explicitly labeled development DMG with an Applications link
+and Start Here instructions. It does not establish Gatekeeper acceptance.
+
+For production, create a **Developer ID Application** certificate using your
+Apple Developer team in Xcode. Keep its private key in Keychain. Set up a local
+notary profile interactively in your own terminal:
+
+```sh
+xcrun notarytool store-credentials LocalAudio-notary
+```
+
+Enter credentials only in Apple's local prompt, never in chat, source files,
+shell history or GitHub. With the reviewed source committed:
+
+```sh
+SIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+NOTARY_PROFILE=LocalAudio-notary ./scripts/release.sh
+```
+
+`release.sh` runs source/tests/build checks, verifies signing teams, hardened
+runtime and timestamps for all three binaries, notarizes/staples the app and
+DMG, checks Gatekeeper, and writes artifact hashes plus submission IDs into
+`dist/release-receipt.json`. The app submission archive is freshly made from
+the verified app to avoid submitting a stale ZIP. The script never publishes.
+The separate physical and clean-Mac checks in [RELEASE-TESTING.md](RELEASE-TESTING.md)
+remain required. No signing key or notary credentials are bundled.
+
+Apple references: [Developer ID certificates](https://developer.apple.com/help/account/certificates/create-developer-id-certificates/)
+and [notarizing macOS software](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).

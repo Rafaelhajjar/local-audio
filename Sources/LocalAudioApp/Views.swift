@@ -26,9 +26,12 @@ struct RootView: View {
                 VStack(spacing: 4) {
                     sidebarButton("Record", image: "record.circle", destination: "record")
                     sidebarButton("Library", image: "rectangle.stack", destination: "library")
+                    sidebarButton("Vault", image: "archivebox", destination: "vault")
                     sidebarButton("People", image: "person.2", destination: "people")
                 }.padding(.horizontal, 10).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 VStack(alignment: .leading, spacing: 14) {
+                    Button { store.showQuickStart = true } label: { Label("Quick start", systemImage: "sparkles").frame(maxWidth: .infinity, alignment: .leading) }
+                        .buttonStyle(.plain).disabled(store.capture.isBusy || store.isLibraryLoading)
                     SettingsLink { Label("Settings", systemImage: "gearshape").frame(maxWidth: .infinity, alignment: .leading) }.buttonStyle(.plain)
                     Divider()
                     Label("Stored on this Mac", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary)
@@ -38,9 +41,12 @@ struct RootView: View {
         } detail: {
             if section == "record" { RecordView(store: store, openLibrary: { section = "library" }) }
             else if section == "people" { PeopleView(store: store) }
-            else { LibraryView(store: store, record: { section = "record" }) }
+            else { LibraryView(store: store, vaultOnly: section == "vault", record: { section = "record" }) }
         }
         .disabled(store.isShuttingDown)
+        .sheet(isPresented: $store.showQuickStart, onDismiss: { store.finishQuickStart() }) {
+            QuickStartView(store: store) { section = store.lastSavedRecording == nil ? "record" : "library" }
+        }
         .alert("LocalAudio", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -73,15 +79,27 @@ struct RecordView: View {
                     Text("Record audio").font(.largeTitle.weight(.bold))
                     Text("Choose a microphone. Your original audio stays on this Mac.").foregroundStyle(.secondary)
                 }
+                AutomaticRecordingView(store: store)
                 VStack(spacing: 28) {
                     HStack {
                         Label("MICROPHONE", systemImage: "mic").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         Spacer()
+                        if store.microphonePolicy.mode == .manual {
                         Picker("Microphone", selection: $capture.selectedDeviceID) {
-                            Text("System default").tag(nil as String?)
-                            ForEach(capture.devices) { input in Text(input.name).tag(Optional(input.id)) }
+                            if store.microphonePolicy.allowMacMicrophone || capture.devices.contains(where: { $0.id == capture.defaultDeviceID && !$0.isBuiltIn }) {
+                                Text("System default").tag(nil as String?)
+                            } else {
+                                Text("Choose an allowed microphone").tag(nil as String?)
+                            }
+                            if let selected = capture.selectedDeviceID, !capture.devices.contains(where: { $0.id == selected }) {
+                                Text("Unavailable microphone").tag(Optional(selected))
+                            }
+                            ForEach(capture.devices.filter { store.microphonePolicy.allowMacMicrophone || !$0.isBuiltIn }) { input in Text(input.name).tag(Optional(input.id)) }
                         }.labelsHidden().frame(maxWidth: 330)
                         .disabled(capture.isRecording || capture.isStarting || capture.isFinalizing)
+                        } else {
+                            Text(store.microphonePolicy.resolve(devices: capture.devices, selectedID: nil, defaultID: nil)?.name ?? "Connect an approved microphone").foregroundStyle(.secondary)
+                        }
                         Button { capture.refreshInputs() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless).help("Refresh audio inputs")
                     }
                     VStack(spacing: 14) {
@@ -93,10 +111,15 @@ struct RecordView: View {
                             .foregroundStyle(capture.isRecording ? .red : .secondary)
                         LevelMeter(level: capture.level, active: capture.isRecording)
                             .frame(maxWidth: 290).accessibilityLabel("Microphone input level")
+                        Text(capture.isBusy ? (capture.lastInputName ?? "Starting allowed microphone…") : (store.microphonePolicy.resolve(devices: capture.devices, selectedID: capture.selectedDeviceID, defaultID: capture.defaultDeviceID)?.name ?? "No allowed microphone available"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let hint = capture.signal.quietInputHint, capture.isRecording {
+                            Text(hint).font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center)
+                        }
                     }.padding(.vertical, 12)
                     HStack(spacing: 14) {
                         if capture.isRecording || capture.isStarting {
-                            Button { Task { await capture.stop() } } label: { Label("Stop & Save", systemImage: "stop.fill").frame(width: 150) }
+                            Button { Task { await store.stopRecording() } } label: { Label("Stop & Save", systemImage: "stop.fill").frame(width: 150) }
                                 .buttonStyle(.borderedProminent).tint(.red).controlSize(.large)
                         } else {
                             Button { Task { await store.startRecording() } } label: { Label("Record", systemImage: "record.circle.fill").frame(width: 150) }
@@ -106,6 +129,7 @@ struct RecordView: View {
                     }
                     if let error = capture.lastError {
                         Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
+                        if capture.microphoneAccessDenied { Button("Open Microphone Settings") { openMicrophoneSettings() }.buttonStyle(.link) }
                     }
                 }
                 .padding(28).background(.background, in: RoundedRectangle(cornerRadius: 20))
@@ -152,12 +176,13 @@ struct LevelMeter: View {
 struct LibraryView: View {
     @ObservedObject var store: AppStore
     @State private var search = ""
+    var vaultOnly = false
     let record: () -> Void
-    var filtered: [AudioRecording] { search.isEmpty ? store.recordings : store.recordings.filter { $0.title.localizedCaseInsensitiveContains(search) } }
+    var filtered: [AudioRecording] { store.recordings.filter { (!vaultOnly || $0.metadata.vaultedAt != nil) && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) } }
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 4) { Text("Your library").font(.title.weight(.bold)); Text("Original audio. Local transcripts.").font(.callout).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 4) { Text(vaultOnly ? "Your vault" : "Your library").font(.title.weight(.bold)); Text(vaultOnly ? "Audio you have chosen to keep permanently." : "Your recordings and transcripts, with or without audio.").font(.callout).foregroundStyle(.secondary) }
                 Spacer()
                 Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh library")
                 Button("Import Audio…") { store.importFiles() }.disabled(store.isImporting)
@@ -169,6 +194,18 @@ struct LibraryView: View {
                 }.foregroundStyle(.orange).padding(.horizontal, 24).padding(.bottom, 12)
             }
             Divider()
+            if !store.interruptedRecordings.isEmpty && !store.capture.isBusy {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(store.interruptedRecordings.count) interrupted recording file(s) kept").font(.callout.weight(.semibold))
+                        Text("These files may contain recoverable audio. They have not been changed or marked complete.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(store.interruptedRecordings) }
+                }.padding(16)
+                Divider()
+            }
             if store.isLibraryLoading && store.recordings.isEmpty {
                 VStack(spacing: 16) {
                     ProgressView("Opening your recording folder…")
@@ -187,8 +224,9 @@ struct LibraryView: View {
                         List(selection: $store.selection) {
                             ForEach(filtered) { item in
                                 VStack(alignment: .leading, spacing: 7) {
-                                    Text(item.title).font(.headline).lineLimit(2)
+                                    Text((item.metadata.vaultedAt != nil ? "▣ " : "") + item.title).font(.headline).lineLimit(2)
                                     HStack { Text(item.date, format: .dateTime.month(.abbreviated).day().hour().minute()); Spacer(); Text(clock(item.duration)).monospacedDigit() }.font(.caption).foregroundStyle(.secondary)
+                                    if !item.hasAudio { Label("Text kept · audio removed", systemImage: "doc.text").font(.caption).foregroundStyle(.secondary) }
                                     if let job = store.job(for: item) {
                                         Label(job.status == .failed ? "Needs attention" : job.status == .running ? "Transcribing" : store.models.isReady ? "Queued" : "Waiting for model", systemImage: job.status == .failed ? "exclamationmark.circle" : "clock").font(.caption).foregroundStyle(job.status == .failed ? .orange : .secondary)
                                     } else if FileManager.default.fileExists(atPath: item.transcriptURL.path) {
@@ -198,7 +236,7 @@ struct LibraryView: View {
                             }
                         }.listStyle(.inset)
                     }.frame(minWidth: 230, idealWidth: 275, maxWidth: 340)
-                    if store.selected != nil { RecordingDetail(store: store) }
+                    if let selected = store.selected, !vaultOnly || selected.metadata.vaultedAt != nil { RecordingDetail(store: store) }
                     else { ContentUnavailableView("Choose a recording", systemImage: "doc.text") }
                 }
             }
@@ -214,6 +252,7 @@ struct RecordingDetail: View {
     @ObservedObject private var voices: VoiceController
     @State private var query = ""
     @State private var detailTab = "transcript"
+    @State private var confirmAudioRemoval = false
     init(store: AppStore) { self.store = store; player = store.player; voices = store.voices }
     var body: some View {
         if let item = store.selected {
@@ -225,8 +264,20 @@ struct RecordingDetail: View {
                         HStack { Button("Save Details") { Task { await store.saveDetails() } }.buttonStyle(.link); Text(clock(item.duration) + " · " + ByteCountFormatter.string(fromByteCount: item.bytes, countStyle: .file)).foregroundStyle(.secondary) }.font(.caption)
                     }
                     Spacer()
-                    Menu { Button("Show Audio in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }; Button("Export Transcript…") { store.exportTranscript() }.disabled(store.transcript == nil) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 30)
+                    Menu {
+                        Button("Show Audio in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }.disabled(!item.hasAudio)
+                        Button("Export Transcript…") { store.exportTranscript() }.disabled(store.transcript == nil)
+                        Divider()
+                        if item.hasAudio, item.metadata.audioRemovedAt != nil { Button("Recover / Restore Audio") { Task { await store.restoreAudio(item) } } }
+                        if item.hasAudio {
+                            Button(item.metadata.vaultedAt == nil ? "Keep Whole Recording in Vault" : "Remove Vault Protection") { Task { await store.setVaulted(item, item.metadata.vaultedAt == nil) } }
+                            Button("Move Audio to Trash…", role: .destructive) { confirmAudioRemoval = true }.disabled(item.metadata.vaultedAt != nil || store.transcript == nil)
+                        } else {
+                            Button("Restore Audio from Trash") { Task { await store.restoreAudio(item) } }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 30).disabled(!store.canManageAudio)
                 }
+                if item.hasAudio {
                 VStack(spacing: 10) {
                     Slider(value: Binding(get: { player.position }, set: { player.seek($0) }), in: 0...max(0.1, player.duration)).accessibilityLabel("Audio playback position")
                     HStack {
@@ -238,20 +289,26 @@ struct RecordingDetail: View {
                         Picker("Speed", selection: $player.rate) { Text("0.75×").tag(Float(0.75)); Text("1×").tag(Float(1)); Text("1.25×").tag(Float(1.25)); Text("1.5×").tag(Float(1.5)); Text("2×").tag(Float(2)) }.frame(width: 112).labelsHidden()
                     }
                 }.padding(16).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                PassagePicker(store: store, item: item).id(item.id)
+                } else {
+                    Label("Audio removed · transcript kept", systemImage: "doc.text").foregroundStyle(.secondary)
+                    Button("Restore Audio from Trash") { Task { await store.restoreAudio(item) } }
+                }
+                if item.metadata.vaultedAt != nil { Label("Saved permanently in the vault", systemImage: "archivebox.fill").font(.caption).foregroundStyle(Color.accentTeal) }
                 if let error = player.error { Text(error).foregroundStyle(.orange).font(.callout) }
                 Divider()
                 Picker("Recording detail", selection: $detailTab) {
                     Text("Transcript").tag("transcript")
-                    Text("Voices").tag("voices")
+                    Text("Voices").tag("voices").disabled(!item.hasAudio)
                 }.pickerStyle(.segmented).labelsHidden()
-                if detailTab == "voices" {
+                if detailTab == "voices", item.hasAudio {
                     RecordingVoicesView(store: store, item: item)
                 } else {
                 HStack {
                     Label("Transcript", systemImage: "doc.text").font(.headline)
                     Spacer()
                     if store.job(for: item)?.status == .running { ProgressView().controlSize(.small) }
-                    else { Button(store.transcript == nil ? "Transcribe" : "Transcribe Again") { store.enqueue(item) } }
+                    else { Button(store.transcript == nil ? "Transcribe" : "Transcribe Again") { store.enqueue(item) }.disabled(!item.hasAudio || store.isManagingAudio) }
                     Button { store.exportTranscript() } label: { Image(systemName: "square.and.arrow.up") }.disabled(store.transcript == nil).help("Export readable text")
                 }
                 if let failure = store.job(for: item)?.error { Text(failure).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -264,7 +321,7 @@ struct RecordingDetail: View {
                             ForEach(transcript.segments.filter { query.isEmpty || $0.text.localizedCaseInsensitiveContains(query) }) { segment in
                                 VStack(alignment: .leading, spacing: 6) {
                                     HStack {
-                                        Button { player.jump(to: segment.start) } label: { Text(item.date.addingTimeInterval(segment.start), format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit()) }.buttonStyle(.link)
+                                        Button { player.jump(to: segment.start) } label: { Text(item.date.addingTimeInterval(segment.start), format: .dateTime.hour().minute().second()).font(.caption.monospacedDigit()) }.buttonStyle(.link).disabled(!item.hasAudio)
                                         if voices.analysis?.recordingID == item.id {
                                             Text(voices.confirmedName(start: segment.start, end: segment.end) ?? "Unknown").font(.caption.weight(.medium)).foregroundStyle(.secondary)
                                         }
@@ -284,6 +341,10 @@ struct RecordingDetail: View {
                 }
                 }
             }.padding(24).frame(minWidth: 430, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .alert("Move audio to Trash?", isPresented: $confirmAudioRemoval) {
+                    Button("Cancel", role: .cancel) {}
+                    Button("Move Audio to Trash", role: .destructive) { Task { await store.removeAudio(item) } }
+                } message: { Text("The transcript and saved vault passages stay in LocalAudio. Audio can be restored until macOS empties Trash.") }
                 .onChange(of: item.id) { _, _ in query = "" }
         }
     }
@@ -298,8 +359,13 @@ struct SettingsView: View {
             Section("Recordings") {
                 LabeledContent("Folder") { Text(store.recordingsFolder.path).lineLimit(2).textSelection(.enabled); Button("Choose…") { store.chooseFolder() }.disabled(!store.canChangeFolder) }
                 Toggle("Transcribe new recordings and imports", isOn: $store.automaticallyTranscribe).onChange(of: store.automaticallyTranscribe) { _, _ in store.savePreferences() }
-                Text("Original audio is always kept. Transcription waits safely until a model is ready.").font(.caption).foregroundStyle(.secondary)
+                Text("Transcription waits until a model is ready. Audio is kept until you enable cleanup or remove it yourself.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Microphones and automatic recording") {
+                MicrophonePreferencesView(store: store)
+                AutomaticRecordingView(store: store)
+            }
+            Section("Audio retention and vault") { AudioRetentionSettings(store: store) }
             Section("Local transcription") {
                 LabeledContent("English model", value: models.isReady ? "Ready on this Mac" : "Optional · about 464 MB")
                 Text(models.statusText).font(.callout).textSelection(.enabled)

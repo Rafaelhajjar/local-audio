@@ -6,6 +6,22 @@ Choose a microphone, press Record, and stop when you are finished. Or import an 
 
 **Development preview.** Apple silicon, macOS 15 or newer. [Preview ZIP and checksum](https://github.com/Rafaelhajjar/local-audio/releases/tag/v0.2.1-preview.1). The app is ad hoc signed and unnotarized; Gatekeeper and clean-Mac installation are unverified, so macOS may block the downloaded build. Build-from-source instructions are below. See [validation evidence](docs/VALIDATION.md) and [the release checklist](docs/CHECKLIST.md) for tested behavior and remaining work.
 
+## Microphones, retention and vault
+
+In **Settings → Microphones and automatic recording**, block the built-in Mac microphone completely, approve several connected inputs, or choose the always-on Mac mode. Approved inputs have priority in list order; one records at a time. Disconnecting the active input ends and saves that file. The app never falls back to an unapproved input. Automatic recording starts only after **Enable Automatic Recording**, while the app is open and the Mac is awake. Files rotate every 30 minutes. **Stop & Save** pauses automation; reopening the app requires enabling it again. A failed input waits for reconnection or a fresh enable.
+
+Audio retention is off by default. **7 days** is the recommended opt-in, with **30 days** also available. Age starts on entry to the library, not the editable recording date; enabling or changing a limit gives existing audio a fresh full window. Cleanup runs hourly while the app is open, or with **Clean Up Due Audio**. It moves only transcribed, unprotected audio to macOS Trash. Unfinished processing, vault audio, saved voice examples and confirmed voice recordings are protected. Missing/corrupt state or transcripts preserve audio. Cleanup may wait while processing is busy.
+
+Transcripts remain in the library after audio removal and can still be read and exported. **Restore Audio from Trash** verifies the stored audio hash before moving it back; restoration depends on Trash still containing the file. macOS can empty Trash separately. Sidecars remain next to the original audio location, so keep them with your library.
+
+In **Library → recording → Save a passage to the vault**, mark start/end while listening or enter seconds, preview the range, and save it permanently. This creates an independent PCM CAF in the recording folder's **Vault** subfolder, without changing the source. It remains playable after the longer recording expires. Use the recording's menu to protect its entire audio instead. Vault protection lasts until explicitly removed; it is not a backup against disk loss. Imported source files outside the library are never cleaned up.
+
+## First launch (0.3 source candidate)
+
+The new Quick start walkthrough shows connected microphones and asks you to connect and select the one you intend to use. Record a short sample, listen back, then optionally download the English model and transcribe the sample. The test recording stays in your library. Setup can be skipped or reopened from the sidebar; no recording or download starts automatically. Existing populated libraries open normally.
+
+A quiet-input hint helps catch the wrong microphone without rejecting valid silence. The Library reports preserved interrupted recording files and can reveal them in Finder.
+
 ## What it does
 
 - Records the system default microphone or a selected input exposed by macOS: built-in, USB, audio interface or compatible Bluetooth device. Device quality and driver behavior vary; system audio capture is outside this version.
@@ -43,6 +59,8 @@ dist/LocalAudio.app/Contents/MacOS/LocalAudio \
   --data-folder /tmp/LocalAudio-test-state \
   --recordings-folder /tmp/LocalAudio-test-recordings
 ```
+
+To create a drag-to-Applications **development** disk image, run `./scripts/make-dmg.sh` after building. Developer ID signing, notarization, and clean-Mac verification are separate steps in [the release procedure](docs/RELEASE.md). See the [physical test matrix](docs/RELEASE-TESTING.md) before making hardware compatibility claims.
 
 ## Your files
 

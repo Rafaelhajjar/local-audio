@@ -112,3 +112,78 @@ The integrated changes were reviewed before publication. All **112 tests passed 
 A fresh Apple silicon release build completed and passed strict ad hoc signature verification. Every file in the rebuilt application matched the extracted October 18 tested application, including all three binaries, resources, manifests and signatures. The release retains that exact previously tested ZIP and its checksum (`419b0f662039ac29bf6497511c1e273ab5570b52b05993c7cf66de660197ed19`); archive timestamps can change a newly generated ZIP without changing its app contents. The ZIP contains no recordings, transcripts, voice profiles, model weights, private evaluation data or logs.
 
 This review does not add new hardware, real-world accuracy, clean-Mac installation or notarization evidence. The release remains an Apple silicon/macOS 15+ development preview with experimental, human-confirmed voice matching.
+
+## 0.3 candidate: first use, installation tooling and capture safeguards (2026-11-24)
+
+The source candidate adds a warm, light Quick start walkthrough, live connected
+microphone choices, a record/listen/model/transcript flow, quiet-input hints,
+interrupted-file discovery, sleep/interruption stop requests, a periodic free-space
+check, and local DMG/production-release tooling. The public 0.2.1 download remains
+a development preview; no production release has been published for this work.
+
+The **117-test suite passed with networking denied**, including the production
+native CAF writer tests, legacy preference decoding, signal-hint behavior,
+low-capacity policy and read-only interrupted-file discovery. Source checks
+retain all 653 frozen vendor hashes. Tests do not open microphones or download
+models. The newly built app and both helpers pass strict ad hoc signature checks.
+Production verification correctly rejects the ad hoc app for missing Developer ID.
+
+The packaged app was launched with separate state and recording folders. Native
+UI checks covered welcome, a short system-default recording, Stop & Save,
+listen-back, explicit 464 MB model setup, successful local model activation,
+transcription of the silent sample, accurate No speech was detected state, and
+finishing into the Library. Setup completion persisted in settings. The final
+no-model path keeps the sample saved and explicitly says transcription can wait;
+it does not imply processing will finish without a model. A later UI
+check showed both **DJI MIC MINI** and **MacBook Pro Microphone** in the connected
+list and successfully selected DJI explicitly. Audio and models stayed in the
+isolated test folders, outside the source and deliverables.
+
+| Isolated capture observation | Result |
+| --- | --- |
+| System default resolving to MacBook Pro microphone | 44.1 kHz mono, 712,192 frames, 16.1495 seconds; full decode |
+| Recording disk deliberately reduced to about 24 MiB free during capture | Automatic stop with low-space warning; 44.1 kHz mono, 876,544 frames, 19.8763 seconds; full decode and metadata saved |
+| Start again while that volume remained low | Clear refusal requiring 32 MiB; no additional completed recording |
+| Explicit MacBook microphone, quit during recording | 44.1 kHz mono, 358,912 frames, 8.1386 seconds; full decode and metadata saved after exit |
+| Explicit DJI MIC MINI from Quick start | 48 kHz stereo, 662,528 frames, 13.8027 seconds; nonzero PCM, full decode, input name retained in listen-back, playback started |
+| Quit while Quick start was recording with DJI | App exited; 48 kHz stereo, 528,384 frames, 11.008 seconds; nonzero PCM, full decode and metadata saved |
+
+The three MacBook microphone files contain **all-zero PCM**. They establish
+valid-silence capture, lifecycle and file preservation in those scenarios. The
+DJI file contains nonzero PCM (peak amplitude 0.05038), and setup showed Sound
+detected. Quit from an active setup recording now clears both the SwiftUI presentation
+binding and the AppKit sheet before using the normal save-and-exit delegate;
+the final native test verified process exit and the saved recording above.
+This establishes real signal capture from that selected device, not
+a validated speech-quality or ASR benchmark. Bluetooth compatibility remains
+open. The level hint correctly reported quiet MacBook input. The disk-pressure test used a separate
+96 MiB mounted HFS+ image; it did not fill the Mac's system disk. Inspection
+revealed that the important-usage capacity estimate returned zero on that image
+while actual free capacity was available; recording now queries uncached actual
+free bytes. The finalization deadline remains independent of disk queries.
+
+A development DMG was built, mounted read-only, and verified to contain an app
+with every regular file matching the packaged application byte for byte, plus
+the correct Applications link. This is a packaging check, not a clean-Mac or
+Gatekeeper installation check. The production script refuses uncommitted source,
+requires Developer ID and notary credentials, and never publishes automatically.
+
+Still open: Developer ID signing/notarization/stapling/Gatekeeper on this candidate,
+a browser-downloaded clean-Mac installation, audible speech on each intended
+microphone, permission denial, physical attach/detach, real sleep/wake, stalled
+storage, and long real-audio sessions. Sleep/interruption handling is implemented
+but not claimed physically validated. Follow [RELEASE-TESTING.md](RELEASE-TESTING.md)
+for the remaining release gates.
+
+## 0.4 recording policies, retention and vault — 2026-11-24
+
+The 0.4 development preview adds explicit microphone policies, opt-in audio retention, transcript-only library entries, whole-recording vault protection and independent passage copies. Automatic capture is paused on every launch and requires an explicit Enable action. No existing user archive or installed app was modified during development.
+
+- **133 tests passed with networking denied**, using generated fixtures. New coverage checks three approved input priorities, the built-in microphone block and no default fallback, failed-input retry gating, old settings migration, retention opt-in persistence, immutable entry age, adoption of unknown-age files with a fresh window, exact passage frames/stereo samples, original hash preservation, vault/work protection, unreadable transcripts, failed/interrupted Trash operations, missing/modified Trash audio, restore hash verification, re-import after audio removal and symbolic-link containment. Existing capture, inference-support and voice tests remain in the suite. Voice protection identities come from the validated voice store; confirmed recordings are protected along with enrolled examples.
+- A packaged native app was launched with disposable generated stereo WAV audio and isolated state. The UI saved **3.25–8.75 seconds** as an independent **5.5-second, 16 kHz stereo CAF** in Vault; the source was unchanged. Passage preview advanced playback. The vault passage remained playable after source audio removal.
+- Native **Move Audio to Trash**, transcript-only browsing/export and **Restore Audio from Trash** succeeded. Enabling the 7-day preset gave the library a fresh window; immediate cleanup removed zero files.
+- In a separate expiry phase on those same disposable fixtures, only fixture entry timestamps and the opt-in timestamp were set eight days back. Relaunch automatically moved the overdue source to macOS Trash while its transcript and vault audio hashes remained unchanged. The source's Trash hash matched its original hash. Restore succeeded afterward and restarted its retention window. Test Trash audio was restored, not permanently purged.
+- With Mac microphone access blocked and no approved input, the native automatic mode waited without creating capture or incomplete files. The connected DJI MIC MINI appeared in the approval list; the Mac microphone disappeared from that list when blocked. Approving the DJI did not start recording. Automatic mode remained paused after relaunch.
+- Native UI review caught and corrected an idle microphone label that still showed the system default instead of the policy-resolved input. The initial Documents-based test launch waited on macOS folder access; temporary isolated storage allowed the integration checks to finish. Normal settings remain in Application Support.
+
+The 0.4 checks do **not** establish physical unplug/reconnect reliability across three devices, sustained always-on capture/30-minute rotation, sleep/wake behavior, general Bluetooth quality, or clean-machine Gatekeeper installation. Existing earlier hardware evidence is separate. Developer ID signing and notarization remain pending; this package is an ad hoc development preview. Retention moves audio to macOS Trash; disk reclamation and eventual permanent deletion depend on macOS Trash policy.

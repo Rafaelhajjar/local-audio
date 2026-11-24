@@ -26,6 +26,10 @@ struct LocalAudioApp: App {
         }
         .defaultSize(width: 1180, height: 780)
         .commands {
+            CommandGroup(replacing: .appTermination) {
+                Button("Quit LocalAudio") { requestApplicationQuit(store: store) }.keyboardShortcut("q")
+                    .disabled(store.isShuttingDown)
+            }
             CommandGroup(after: .newItem) {
                 Button("Import Audio…") { store.importFiles() }.keyboardShortcut("i")
                     .disabled(store.isShuttingDown || store.isImporting || store.isLibraryLoading)
@@ -49,7 +53,7 @@ struct RecordingCommands: Commands {
         CommandMenu("Recording") {
             Button("Start Recording") { Task { await store.startRecording() } }
                 .disabled(store.isShuttingDown || capture.isRecording || capture.isStarting || capture.isFinalizing)
-            Button("Stop & Save") { Task { await capture.stop() } }
+            Button("Stop & Save") { Task { await store.stopRecording() } }
                 .disabled(!capture.isRecording && !capture.isStarting)
         }
     }
@@ -80,14 +84,28 @@ struct MenuBarView: View {
     init(store: AppStore, showWindow: @escaping () -> Void) { self.store = store; capture = store.capture; self.showWindow = showWindow }
     var body: some View {
         Text(capture.isRecording ? "Recording · " + clock(capture.elapsed) : "LocalAudio")
+        if store.automaticRecordingArmed { Button("Pause Automatic Recording & Save") { Task { await store.stopRecording() } } }
         Button("Show LocalAudio", action: showWindow).disabled(store.isShuttingDown)
         Divider()
         if capture.isRecording || capture.isStarting {
-            Button("Stop & Save") { Task { await capture.stop() } }
+            Button("Stop & Save") { Task { await store.stopRecording() } }
         } else {
             Button("Start Recording") { Task { await store.startRecording() } }.disabled(capture.isFinalizing || store.isShuttingDown)
         }
         Divider()
-        Button("Quit LocalAudio") { NSApp.terminate(nil) }
+        Button("Quit LocalAudio") { requestApplicationQuit(store: store) }
     }
+}
+
+/// AppKit can defer its standard terminate action while a setup sheet is open.
+/// Close presentation first, then use the delegate's normal save-and-quit path.
+@MainActor
+func requestApplicationQuit(store: AppStore) {
+    // Update SwiftUI's presentation binding as well as AppKit's sheet; during
+    // capture, finishQuickStart intentionally refuses to mark setup complete.
+    store.showQuickStart = false
+    for window in NSApp.windows {
+        if let parent = window.sheetParent { parent.endSheet(window) }
+    }
+    NSApp.terminate(nil)
 }

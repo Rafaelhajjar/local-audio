@@ -13,7 +13,9 @@ One SwiftUI Mac application, bundled offline transcription and speaker helpers, 
 
 ## Files and failure behavior
 
-Recording writes a unique hidden staging CAF. A successful stop finalizes it, reopens it, checks rate/frame count, then publishes the readable filename. Silence is valid audio. Disconnect, writer, permission and disk failures surface in the UI. Audio never silently changes to a different named microphone during a recording.
+Quick start uses the production capture/player/model paths with explicit user actions. Completion is an optional preference so older settings remain readable. Empty new libraries receive the walkthrough; populated existing libraries do not. The input list reflects AVFoundation discovery and attach/detach events.
+
+Recording writes a unique hidden staging CAF. A successful stop finalizes it, reopens it, checks rate/frame count, then publishes the readable filename. Silence is valid audio. Disconnect, writer, permission and disk failures surface in the UI. Audio never silently changes to a different named microphone during a recording. Sleep/session interruption requests a stop. A separate utility queue polls available disk capacity every five seconds and requests an early stop below a 32 MiB reserve; the independent finalization deadline never waits for that capacity read. This is best-effort protection, not a guarantee against disk/device failure. Input-level hints are presentation only. Interrupted hidden files can be revealed in Finder and are never rewritten by discovery.
 
 Import validates the source, streams its SHA-256, copies to staging, checks source size/date and copied hash, then publishes a UUID filename and metadata. Duplicate imports return the existing content-identical item. Title/date edits only change metadata. Distinct audio extensions retain distinct sidecars. Unreadable library files are listed as warnings without rewriting them.
 
